@@ -15,7 +15,6 @@ import { ProjectCategory } from './projects/entities/project-category.entity';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '.env',
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
