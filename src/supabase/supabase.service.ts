@@ -1,7 +1,7 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class SupabaseService {
@@ -35,7 +35,7 @@ export class SupabaseService {
     try {
       // Generate unique filename with UUID prefix
       const fileExtension = fileName.split('.').pop();
-      const uniqueFileName = `${uuidv4()}-${Date.now()}.${fileExtension}`;
+      const uniqueFileName = `${randomUUID()}-${Date.now()}.${fileExtension}`;
       const filePath = `uploads/${uniqueFileName}`;
 
       console.log(`📤 Uploading file to Supabase: ${filePath}`);
