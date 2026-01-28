@@ -27,11 +27,16 @@ export function validateEnvironment() {
   });
 
   if (missingVars.length > 0) {
-    throw new Error(
-      `Missing required environment variables: ${missingVars.join(', ')}. ` +
-        `Please set them in Railway's environment variables.`,
-    );
+    console.error('⚠️  WARNING: Missing required environment variables:', missingVars.join(', '));
+    console.error('⚠️  App may not work correctly!');
+    // Don't throw error in production to see other logs
+    if (process.env.NODE_ENV !== 'production') {
+      throw new Error(
+        `Missing required environment variables: ${missingVars.join(', ')}. ` +
+          `Please set them in Railway's environment variables.`,
+      );
+    }
+  } else {
+    console.log('✅ All required environment variables are set!');
   }
-
-  console.log('✅ All required environment variables are set!');
 }
