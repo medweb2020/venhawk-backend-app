@@ -17,6 +17,9 @@ export class Project {
   @Column({ type: 'varchar', length: 500, nullable: false })
   project_title: string;
 
+  @Column({ type: 'varchar', length: 180, nullable: false, comment: 'System name for the project' })
+  system_name: string;
+
   @Column({ type: 'int', nullable: false })
   client_industry_id: number;
 
