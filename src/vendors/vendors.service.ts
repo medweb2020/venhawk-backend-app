@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { Vendor } from './entities/vendor.entity';
@@ -58,6 +58,21 @@ export class VendorsService {
     );
 
     return orderedVendors.map((vendor) => this.transformToListingResponseDto(vendor));
+  }
+
+  async getListingVendorById(vendorId: string): Promise<VendorListingResponseDto> {
+    const vendor = await this.vendorsRepository.findOne({
+      where: {
+        vendor_id: vendorId,
+        status: In(['Prospect', 'Validated', 'Active']),
+      },
+    });
+
+    if (!vendor || !this.LISTING_VENDOR_IDS.includes(vendor.vendor_id)) {
+      throw new NotFoundException('Vendor not found');
+    }
+
+    return this.transformToListingResponseDto(vendor);
   }
 
   async findMatchingVendors(
@@ -372,6 +387,8 @@ export class VendorsService {
       vendorId: vendor.vendor_id,
       name: vendor.brand_name,
       logoUrl: vendor.logo_url || null,
+      websiteUrl: vendor.website_url || null,
+      headquarter: vendor.hq_country,
       category: vendor.vendor_type || 'Technology Services',
       location: this.formatLocation(vendor),
       rating: this.resolveRating(vendor),

@@ -3,6 +3,8 @@ export class VendorListingResponseDto {
   vendorId: string;
   name: string;
   logoUrl: string | null;
+  websiteUrl: string | null;
+  headquarter: string;
   category: string;
   location: string;
   rating: number;
