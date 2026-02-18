@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Vendor } from './entities/vendor.entity';
 import { VendorResponseDto } from './dto/vendor-response.dto';
+import { VendorListingResponseDto } from './dto/vendor-listing-response.dto';
 
 interface ProjectCriteria {
   projectCategory: string;
@@ -16,6 +17,15 @@ interface ProjectCriteria {
 
 @Injectable()
 export class VendorsService {
+  private readonly LISTING_VENDOR_IDS = [
+    'dff94198-9f09-4e32-934a-d367d5eb9af7',
+    'be8ab7ca-8cf9-41e1-a031-d9c75f6345f8',
+    '9ebe8dd2-b6ec-4f65-99f1-3048fdb6f9e0',
+    '65fe96d7-315f-4c4f-a046-a9d48f7bb56d',
+    '86593b74-3f79-4c83-b484-8813f8f3d760',
+    '3d11b0ec-e51d-4a25-9d6f-41c56566ce7c',
+  ];
+
   // Matching weights as per requirement
   private readonly WEIGHTS = {
     CAPABILITY_MATCH: 0.30,    // 30% - Project Category + Work Type
@@ -31,6 +41,24 @@ export class VendorsService {
     @InjectRepository(Vendor)
     private vendorsRepository: Repository<Vendor>,
   ) {}
+
+  async getListingVendors(): Promise<VendorListingResponseDto[]> {
+    const vendors = await this.vendorsRepository.find({
+      where: {
+        vendor_id: In(this.LISTING_VENDOR_IDS),
+        status: In(['Prospect', 'Validated', 'Active']),
+      },
+    });
+
+    const orderIndex = new Map(this.LISTING_VENDOR_IDS.map((id, index) => [id, index]));
+
+    const orderedVendors = vendors.sort((a, b) =>
+      (orderIndex.get(a.vendor_id) ?? Number.MAX_SAFE_INTEGER) -
+      (orderIndex.get(b.vendor_id) ?? Number.MAX_SAFE_INTEGER)
+    );
+
+    return orderedVendors.map((vendor) => this.transformToListingResponseDto(vendor));
+  }
 
   async findMatchingVendors(
     projectCategory: string,
@@ -311,30 +339,16 @@ export class VendorsService {
   }
 
   private transformToResponseDto(vendor: Vendor, matchingScore: number): VendorResponseDto {
-    // Calculate tier based on company size and ratings
-    const tier = this.calculateTier(vendor);
+    const tier = vendor.listing_tier || this.calculateTier(vendor);
 
     // Generate logo (first 2-3 letters of brand name)
     const logo = this.generateLogo(vendor.brand_name);
 
-    // Format location
-    const location = vendor.hq_state
-      ? `${vendor.hq_state}, ${vendor.hq_country}`
-      : vendor.hq_country;
-
-    // Use best available rating
-    const rating = vendor.rating_1 || vendor.rating_2 || 0;
-
-    // Generate description from vendor type and service domains
-    const description = this.generateDescription(vendor);
-
-    // Determine specialty from legal tech stack or platforms
-    const specialty = this.determineSpecialty(vendor);
-
-    // Format starting price
-    const startFrom = vendor.min_project_size_usd
-      ? `$${(vendor.min_project_size_usd / 1000).toFixed(0)}k`
-      : 'Contact for pricing';
+    const location = this.formatLocation(vendor);
+    const rating = this.resolveRating(vendor);
+    const description = vendor.listing_description || this.generateDescription(vendor);
+    const specialty = vendor.listing_specialty || this.determineSpecialty(vendor);
+    const startFrom = this.formatStartFrom(vendor.min_project_size_usd);
 
     return {
       id: vendor.id,
@@ -349,6 +363,22 @@ export class VendorsService {
       specialty,
       startFrom,
       matchingScore,
+    };
+  }
+
+  private transformToListingResponseDto(vendor: Vendor): VendorListingResponseDto {
+    return {
+      id: vendor.id,
+      vendorId: vendor.vendor_id,
+      name: vendor.brand_name,
+      logoUrl: vendor.logo_url || null,
+      category: vendor.vendor_type || 'Technology Services',
+      location: this.formatLocation(vendor),
+      rating: this.resolveRating(vendor),
+      tier: vendor.listing_tier || this.calculateTier(vendor),
+      description: vendor.listing_description || this.generateDescription(vendor),
+      specialty: vendor.listing_specialty || this.determineSpecialty(vendor),
+      startFrom: this.formatStartFrom(vendor.min_project_size_usd),
     };
   }
 
@@ -408,5 +438,21 @@ export class VendorsService {
     }
 
     return vendor.vendor_type || 'General IT Services';
+  }
+
+  private formatLocation(vendor: Vendor): string {
+    return vendor.hq_state ? `${vendor.hq_state}, ${vendor.hq_country}` : vendor.hq_country;
+  }
+
+  private resolveRating(vendor: Vendor): number {
+    return Number(vendor.rating_1 || vendor.rating_2 || 0);
+  }
+
+  private formatStartFrom(minProjectSizeUsd: number): string {
+    if (!minProjectSizeUsd) {
+      return 'Contact for pricing';
+    }
+
+    return `$${(Number(minProjectSizeUsd) / 1000).toFixed(0)}k`;
   }
 }
