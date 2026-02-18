@@ -1,9 +1,9 @@
-import { IsString, IsEnum, IsOptional, IsBoolean, IsDateString, ValidateIf, MinLength, MaxLength } from 'class-validator';
+import { IsString, IsEnum, IsOptional, IsBoolean, IsDateString, ValidateIf, MinLength, MaxLength, IsNotEmpty, IsArray, IsUrl } from 'class-validator';
 
 export class CreateProjectDto {
   // Page 1 - Project Details
   @IsString()
-  @IsEnum(['financial', 'healthcare', 'legal', 'saas', 'technology', 'government'])
+  @IsNotEmpty()
   clientIndustry: string;
 
   @IsString()
@@ -12,21 +12,32 @@ export class CreateProjectDto {
   projectTitle: string;
 
   @IsString()
-  @IsEnum(['erp', 'app-upgrades', 'cloud-migration', 'network', 'security', 'collaboration', 'data-analytics', 'disaster-recovery', 'itsm', 'endpoint', 'database', 'virtualization', 'cloud-security', 'other'])
+  @IsNotEmpty()
+  @IsEnum(['legal-apps', 'cloud-migration', 'enterprise-it', 'app-bug-fixes'], {
+    message: 'projectCategory must be one of: legal-apps, cloud-migration, enterprise-it, app-bug-fixes',
+  })
   projectCategory: string;
 
   @ValidateIf(o => o.projectCategory === 'other')
   @IsString()
   @MinLength(1)
-  @MaxLength(500)
+  @MaxLength(180)
   projectCategoryOther?: string;
 
   @IsString()
-  @MinLength(10)
+  @IsNotEmpty()
+  @MinLength(1)
+  @MaxLength(180)
+  systemName: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(1)
   projectObjective: string;
 
   @IsString()
-  @MinLength(10)
+  @IsNotEmpty()
+  @MinLength(1)
   businessRequirements: string;
 
   @IsString()
@@ -65,4 +76,10 @@ export class CreateProjectDto {
   @IsString()
   @IsEnum(['draft', 'submitted'])
   status: string;
+
+  // File attachments
+  @IsArray()
+  @IsUrl({}, { each: true })
+  @IsOptional()
+  fileUrls?: string[];
 }
