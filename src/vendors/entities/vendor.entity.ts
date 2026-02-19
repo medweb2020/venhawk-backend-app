@@ -27,18 +27,6 @@ export class Vendor {
   @Column({ type: 'varchar', length: 500, nullable: true })
   logo_url: string;
 
-  @Column({ type: 'int', nullable: true })
-  listing_order: number;
-
-  @Column({ type: 'text', nullable: true })
-  listing_description: string;
-
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  listing_specialty: string;
-
-  @Column({ type: 'varchar', length: 20, nullable: true })
-  listing_tier: string;
-
   // COMPANY DETAILS
   @Column({ type: 'varchar', length: 100, default: 'USA' })
   hq_country: string;

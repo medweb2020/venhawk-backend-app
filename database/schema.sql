@@ -220,11 +220,6 @@ CREATE TABLE vendors (
     brand_name VARCHAR(255) NOT NULL,
     legal_name VARCHAR(255),
     website_url VARCHAR(500) NOT NULL,
-    logo_url VARCHAR(500),
-    listing_order INT,
-    listing_description TEXT,
-    listing_specialty VARCHAR(100),
-    listing_tier VARCHAR(20),
     
     -- COMPANY DETAILS
     hq_country VARCHAR(100) DEFAULT 'USA',
