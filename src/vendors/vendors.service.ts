@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Vendor } from './entities/vendor.entity';
 import { VendorResponseDto } from './dto/vendor-response.dto';
 import { VendorListingResponseDto } from './dto/vendor-listing-response.dto';
@@ -17,24 +17,17 @@ interface ProjectCriteria {
 
 @Injectable()
 export class VendorsService {
-  private readonly LISTING_VENDOR_IDS = [
-    'dff94198-9f09-4e32-934a-d367d5eb9af7',
-    'be8ab7ca-8cf9-41e1-a031-d9c75f6345f8',
-    '9ebe8dd2-b6ec-4f65-99f1-3048fdb6f9e0',
-    '65fe96d7-315f-4c4f-a046-a9d48f7bb56d',
-    '86593b74-3f79-4c83-b484-8813f8f3d760',
-    '3d11b0ec-e51d-4a25-9d6f-41c56566ce7c',
-  ];
+  private readonly LISTING_STATUSES = ['Prospect', 'Validated', 'Active'];
 
   // Matching weights as per requirement
   private readonly WEIGHTS = {
-    CAPABILITY_MATCH: 0.30,    // 30% - Project Category + Work Type
-    SYSTEM_MATCH: 0.25,        // 25% - Primary Application / extracted systems
-    PRICING_FIT: 0.15,         // 15% - Budget vs vendor pricing
-    TIMELINE_AVAILABILITY: 0.10, // 10% - Timeline vs capacity
-    PROOF_REVIEWS: 0.10,       // 10% - Reviews + case studies
-    CERTIFICATIONS: 0.05,      // 5% - Certs required by project
-    ILTA_PRESENCE: 0.05,       // 5% - Yes / No field
+    CAPABILITY_MATCH: 0.3, // 30% - Project Category + Work Type
+    SYSTEM_MATCH: 0.25, // 25% - Primary Application / extracted systems
+    PRICING_FIT: 0.15, // 15% - Budget vs vendor pricing
+    TIMELINE_AVAILABILITY: 0.1, // 10% - Timeline vs capacity
+    PROOF_REVIEWS: 0.1, // 10% - Reviews + case studies
+    CERTIFICATIONS: 0.05, // 5% - Certs required by project
+    ILTA_PRESENCE: 0.05, // 5% - Yes / No field
   };
 
   constructor(
@@ -43,32 +36,36 @@ export class VendorsService {
   ) {}
 
   async getListingVendors(): Promise<VendorListingResponseDto[]> {
-    const vendors = await this.vendorsRepository.find({
-      where: {
-        vendor_id: In(this.LISTING_VENDOR_IDS),
-        status: In(['Prospect', 'Validated', 'Active']),
-      },
-    });
+    const vendors = await this.vendorsRepository
+      .createQueryBuilder('vendor')
+      .where('vendor.status IN (:...statuses)', {
+        statuses: this.LISTING_STATUSES,
+      })
+      .orderBy(
+        'CASE WHEN vendor.listing_order IS NULL THEN 1 ELSE 0 END',
+        'ASC',
+      )
+      .addOrderBy('vendor.listing_order', 'ASC')
+      .addOrderBy('vendor.brand_name', 'ASC')
+      .getMany();
 
-    const orderIndex = new Map(this.LISTING_VENDOR_IDS.map((id, index) => [id, index]));
-
-    const orderedVendors = vendors.sort((a, b) =>
-      (orderIndex.get(a.vendor_id) ?? Number.MAX_SAFE_INTEGER) -
-      (orderIndex.get(b.vendor_id) ?? Number.MAX_SAFE_INTEGER)
+    return vendors.map((vendor) =>
+      this.transformToListingResponseDto(vendor),
     );
-
-    return orderedVendors.map((vendor) => this.transformToListingResponseDto(vendor));
   }
 
-  async getListingVendorById(vendorId: string): Promise<VendorListingResponseDto> {
-    const vendor = await this.vendorsRepository.findOne({
-      where: {
-        vendor_id: vendorId,
-        status: In(['Prospect', 'Validated', 'Active']),
-      },
-    });
+  async getListingVendorById(
+    vendorId: string,
+  ): Promise<VendorListingResponseDto> {
+    const vendor = await this.vendorsRepository
+      .createQueryBuilder('vendor')
+      .where('vendor.vendor_id = :vendorId', { vendorId })
+      .andWhere('vendor.status IN (:...statuses)', {
+        statuses: this.LISTING_STATUSES,
+      })
+      .getOne();
 
-    if (!vendor || !this.LISTING_VENDOR_IDS.includes(vendor.vendor_id)) {
+    if (!vendor) {
       throw new NotFoundException('Vendor not found');
     }
 
@@ -87,7 +84,9 @@ export class VendorsService {
     // Get all active vendors (including Prospect status)
     const vendors = await this.vendorsRepository
       .createQueryBuilder('vendor')
-      .where('vendor.status IN (:...statuses)', { statuses: ['Prospect', 'Validated', 'Active'] })
+      .where('vendor.status IN (:...statuses)', {
+        statuses: ['Prospect', 'Validated', 'Active'],
+      })
       .getMany();
 
     const projectCriteria: ProjectCriteria = {
@@ -101,8 +100,11 @@ export class VendorsService {
     };
 
     // Calculate matching score for each vendor
-    const vendorsWithScores = vendors.map(vendor => {
-      const matchingScore = this.calculateMatchingScore(vendor, projectCriteria);
+    const vendorsWithScores = vendors.map((vendor) => {
+      const matchingScore = this.calculateMatchingScore(
+        vendor,
+        projectCriteria,
+      );
       return {
         vendor,
         matchingScore,
@@ -114,15 +116,17 @@ export class VendorsService {
     const systemSupportingVendors = vendorsWithScores.filter(({ vendor }) => {
       // Check if vendor has the system in their tech stack or platforms
       const hasSystemSupport =
-        (vendor.legal_tech_stack && vendor.legal_tech_stack.toLowerCase().includes(systemNameLower)) ||
-        (vendor.platforms_experience && vendor.platforms_experience.toLowerCase().includes(systemNameLower));
+        (vendor.legal_tech_stack &&
+          vendor.legal_tech_stack.toLowerCase().includes(systemNameLower)) ||
+        (vendor.platforms_experience &&
+          vendor.platforms_experience.toLowerCase().includes(systemNameLower));
 
       return hasSystemSupport;
     });
 
     // Filter out vendors with 0 or null matching scores
     const validVendors = systemSupportingVendors.filter(
-      ({ matchingScore }) => matchingScore > 0
+      ({ matchingScore }) => matchingScore > 0,
     );
 
     // Sort by matching score (highest first)
@@ -133,38 +137,53 @@ export class VendorsService {
 
     // Transform to response format
     return top5Vendors.map(({ vendor, matchingScore }) =>
-      this.transformToResponseDto(vendor, matchingScore)
+      this.transformToResponseDto(vendor, matchingScore),
     );
   }
 
-  private calculateMatchingScore(vendor: Vendor, criteria: ProjectCriteria): number {
+  private calculateMatchingScore(
+    vendor: Vendor,
+    criteria: ProjectCriteria,
+  ): number {
     let totalScore = 0;
 
     // 1. Capability Match (30%) - Project Category + Work Type
-    totalScore += this.calculateCapabilityMatch(vendor, criteria) * this.WEIGHTS.CAPABILITY_MATCH;
+    totalScore +=
+      this.calculateCapabilityMatch(vendor, criteria) *
+      this.WEIGHTS.CAPABILITY_MATCH;
 
     // 2. System Match (25%) - Primary Application / extracted systems
-    totalScore += this.calculateSystemMatch(vendor, criteria) * this.WEIGHTS.SYSTEM_MATCH;
+    totalScore +=
+      this.calculateSystemMatch(vendor, criteria) * this.WEIGHTS.SYSTEM_MATCH;
 
     // 3. Pricing Fit (15%) - Budget vs vendor pricing
-    totalScore += this.calculatePricingFit(vendor, criteria) * this.WEIGHTS.PRICING_FIT;
+    totalScore +=
+      this.calculatePricingFit(vendor, criteria) * this.WEIGHTS.PRICING_FIT;
 
     // 4. Timeline & Availability Fit (10%)
-    totalScore += this.calculateTimelineAvailabilityFit(vendor, criteria) * this.WEIGHTS.TIMELINE_AVAILABILITY;
+    totalScore +=
+      this.calculateTimelineAvailabilityFit(vendor, criteria) *
+      this.WEIGHTS.TIMELINE_AVAILABILITY;
 
     // 5. Proof & Reviews (10%)
-    totalScore += this.calculateProofReviews(vendor) * this.WEIGHTS.PROOF_REVIEWS;
+    totalScore +=
+      this.calculateProofReviews(vendor) * this.WEIGHTS.PROOF_REVIEWS;
 
     // 6. Certifications & Credentials (5%)
-    totalScore += this.calculateCertifications(vendor) * this.WEIGHTS.CERTIFICATIONS;
+    totalScore +=
+      this.calculateCertifications(vendor) * this.WEIGHTS.CERTIFICATIONS;
 
     // 7. ILTA Presence (5%)
-    totalScore += this.calculateILTAPresence(vendor) * this.WEIGHTS.ILTA_PRESENCE;
+    totalScore +=
+      this.calculateILTAPresence(vendor) * this.WEIGHTS.ILTA_PRESENCE;
 
     return Math.round(totalScore * 100); // Return as percentage (0-100)
   }
 
-  private calculateCapabilityMatch(vendor: Vendor, criteria: ProjectCriteria): number {
+  private calculateCapabilityMatch(
+    vendor: Vendor,
+    criteria: ProjectCriteria,
+  ): number {
     let score = 0;
 
     // Map project categories to service domain keywords
@@ -173,10 +192,10 @@ export class VendorsService {
       'cloud-migration': ['cloud'],
       'enterprise-it': ['enterprise apps', 'service mgmt'],
       'app-upgrades': ['enterprise apps'],
-      'collaboration': ['collaboration'],
-      'security': ['identity', 'security'],
+      collaboration: ['collaboration'],
+      security: ['identity', 'security'],
       'data-archive': ['enterprise apps'],
-      'other': [],
+      other: [],
     };
 
     // Check if service domains match the project category
@@ -205,7 +224,10 @@ export class VendorsService {
     }
 
     // Legal focus bonus for legal-related projects
-    if (criteria.projectCategory.includes('legal') && vendor.legal_focus_level) {
+    if (
+      criteria.projectCategory.includes('legal') &&
+      vendor.legal_focus_level
+    ) {
       if (vendor.legal_focus_level === 'Legal-only') score += 0.3;
       else if (vendor.legal_focus_level === 'Strong') score += 0.2;
       else if (vendor.legal_focus_level === 'Some') score += 0.1;
@@ -214,7 +236,10 @@ export class VendorsService {
     return Math.min(score, 1); // Cap at 1
   }
 
-  private calculateSystemMatch(vendor: Vendor, criteria: ProjectCriteria): number {
+  private calculateSystemMatch(
+    vendor: Vendor,
+    criteria: ProjectCriteria,
+  ): number {
     let score = 0;
     let hasData = false;
 
@@ -247,15 +272,26 @@ export class VendorsService {
     return Math.min(score, 1);
   }
 
-  private calculatePricingFit(vendor: Vendor, criteria: ProjectCriteria): number {
-    const projectBudget = criteria.budgetAmount || criteria.budgetMax || criteria.budgetMin;
+  private calculatePricingFit(
+    vendor: Vendor,
+    criteria: ProjectCriteria,
+  ): number {
+    const projectBudget =
+      criteria.budgetAmount || criteria.budgetMax || criteria.budgetMin;
 
-    if (!projectBudget || !vendor.min_project_size_usd || !vendor.max_project_size_usd) {
+    if (
+      !projectBudget ||
+      !vendor.min_project_size_usd ||
+      !vendor.max_project_size_usd
+    ) {
       return 0.5; // Neutral score if no pricing data
     }
 
     // Perfect fit: project budget within vendor range
-    if (projectBudget >= vendor.min_project_size_usd && projectBudget <= vendor.max_project_size_usd) {
+    if (
+      projectBudget >= vendor.min_project_size_usd &&
+      projectBudget <= vendor.max_project_size_usd
+    ) {
       return 1.0;
     }
 
@@ -278,14 +314,19 @@ export class VendorsService {
     return 0.5;
   }
 
-  private calculateTimelineAvailabilityFit(vendor: Vendor, criteria: ProjectCriteria): number {
+  private calculateTimelineAvailabilityFit(
+    vendor: Vendor,
+    criteria: ProjectCriteria,
+  ): number {
     if (!criteria.startDate || !vendor.lead_time_weeks) {
       return 0.5; // Neutral if no timeline data
     }
 
     const startDate = new Date(criteria.startDate);
     const today = new Date();
-    const weeksUntilStart = Math.ceil((startDate.getTime() - today.getTime()) / (7 * 24 * 60 * 60 * 1000));
+    const weeksUntilStart = Math.ceil(
+      (startDate.getTime() - today.getTime()) / (7 * 24 * 60 * 60 * 1000),
+    );
 
     // Check if vendor can meet the timeline
     if (weeksUntilStart >= vendor.lead_time_weeks) {
@@ -353,7 +394,10 @@ export class VendorsService {
     return 0;
   }
 
-  private transformToResponseDto(vendor: Vendor, matchingScore: number): VendorResponseDto {
+  private transformToResponseDto(
+    vendor: Vendor,
+    matchingScore: number,
+  ): VendorResponseDto {
     const tier = vendor.listing_tier || this.calculateTier(vendor);
 
     // Generate logo (first 2-3 letters of brand name)
@@ -361,8 +405,10 @@ export class VendorsService {
 
     const location = this.formatLocation(vendor);
     const rating = this.resolveRating(vendor);
-    const description = vendor.listing_description || this.generateDescription(vendor);
-    const specialty = vendor.listing_specialty || this.determineSpecialty(vendor);
+    const description =
+      vendor.listing_description || this.generateDescription(vendor);
+    const specialty =
+      vendor.listing_specialty || this.determineSpecialty(vendor);
     const startFrom = this.formatStartFrom(vendor.min_project_size_usd);
 
     return {
@@ -381,7 +427,9 @@ export class VendorsService {
     };
   }
 
-  private transformToListingResponseDto(vendor: Vendor): VendorListingResponseDto {
+  private transformToListingResponseDto(
+    vendor: Vendor,
+  ): VendorListingResponseDto {
     return {
       id: vendor.id,
       vendorId: vendor.vendor_id,
@@ -393,7 +441,8 @@ export class VendorsService {
       location: this.formatLocation(vendor),
       rating: this.resolveRating(vendor),
       tier: vendor.listing_tier || this.calculateTier(vendor),
-      description: vendor.listing_description || this.generateDescription(vendor),
+      description:
+        vendor.listing_description || this.generateDescription(vendor),
       specialty: vendor.listing_specialty || this.determineSpecialty(vendor),
       startFrom: this.formatStartFrom(vendor.min_project_size_usd),
     };
@@ -401,9 +450,15 @@ export class VendorsService {
 
   private calculateTier(vendor: Vendor): string {
     // Tier logic based on company size, ratings, and legal focus
-    if (vendor.company_size_band?.includes('1000+') || vendor.legal_focus_level === 'Legal-only') {
+    if (
+      vendor.company_size_band?.includes('1000+') ||
+      vendor.legal_focus_level === 'Legal-only'
+    ) {
       return 'Tier 1';
-    } else if (vendor.company_size_band?.includes('100-') || vendor.legal_focus_level === 'Strong') {
+    } else if (
+      vendor.company_size_band?.includes('100-') ||
+      vendor.legal_focus_level === 'Strong'
+    ) {
       return 'Tier 2';
     }
     return 'Tier 3';
@@ -413,7 +468,11 @@ export class VendorsService {
     // Extract first 2-3 letters for logo
     const words = brandName.split(' ');
     if (words.length >= 2) {
-      return words.slice(0, 2).map(w => w[0]).join('').toUpperCase();
+      return words
+        .slice(0, 2)
+        .map((w) => w[0])
+        .join('')
+        .toUpperCase();
     }
     return brandName.substring(0, 3).toUpperCase();
   }
@@ -434,7 +493,9 @@ export class VendorsService {
       parts.push(`specializing in ${domains}`);
     }
 
-    return parts.join(' ') || 'Technology consulting and implementation services';
+    return (
+      parts.join(' ') || 'Technology consulting and implementation services'
+    );
   }
 
   private determineSpecialty(vendor: Vendor): string {
@@ -458,7 +519,9 @@ export class VendorsService {
   }
 
   private formatLocation(vendor: Vendor): string {
-    return vendor.hq_state ? `${vendor.hq_state}, ${vendor.hq_country}` : vendor.hq_country;
+    return vendor.hq_state
+      ? `${vendor.hq_state}, ${vendor.hq_country}`
+      : vendor.hq_country;
   }
 
   private resolveRating(vendor: Vendor): number {
