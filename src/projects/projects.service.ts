@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Project } from './entities/project.entity';
@@ -25,11 +29,16 @@ export class ProjectsService {
     private vendorsService: VendorsService,
   ) {}
 
-  async create(createProjectDto: CreateProjectDto, auth0UserId: string): Promise<CreateProjectResponseDto> {
+  async create(
+    createProjectDto: CreateProjectDto,
+    auth0UserId: string,
+  ): Promise<CreateProjectResponseDto> {
     // 1. Lookup user by Auth0 ID
     const user = await this.usersService.findByAuth0Id(auth0UserId);
     if (!user) {
-      throw new NotFoundException(`User with Auth0 ID '${auth0UserId}' not found. Please sync user first.`);
+      throw new NotFoundException(
+        `User with Auth0 ID '${auth0UserId}' not found. Please sync user first.`,
+      );
     }
 
     // 2. Lookup client industry ID
@@ -38,7 +47,9 @@ export class ProjectsService {
     });
 
     if (!clientIndustry) {
-      throw new NotFoundException(`Client industry '${createProjectDto.clientIndustry}' not found`);
+      throw new NotFoundException(
+        `Client industry '${createProjectDto.clientIndustry}' not found`,
+      );
     }
 
     // 3. Lookup project category ID
@@ -47,16 +58,24 @@ export class ProjectsService {
     });
 
     if (!projectCategory) {
-      throw new NotFoundException(`Project category '${createProjectDto.projectCategory}' not found`);
+      throw new NotFoundException(
+        `Project category '${createProjectDto.projectCategory}' not found`,
+      );
     }
 
     // 4. Validate budget ranges
     if (createProjectDto.budgetType === 'range') {
-      const minBudget = parseFloat(createProjectDto.minBudget.replace(/,/g, ''));
-      const maxBudget = parseFloat(createProjectDto.maxBudget.replace(/,/g, ''));
+      const minBudget = parseFloat(
+        createProjectDto.minBudget.replace(/,/g, ''),
+      );
+      const maxBudget = parseFloat(
+        createProjectDto.maxBudget.replace(/,/g, ''),
+      );
 
       if (maxBudget < minBudget) {
-        throw new BadRequestException('maxBudget must be greater than or equal to minBudget');
+        throw new BadRequestException(
+          'maxBudget must be greater than or equal to minBudget',
+        );
       }
     }
 
@@ -67,7 +86,10 @@ export class ProjectsService {
       system_name: createProjectDto.systemName,
       client_industry_id: clientIndustry.id,
       project_category_id: projectCategory.id,
-      project_category_custom: createProjectDto.projectCategory === 'other' ? createProjectDto.projectCategoryOther : null,
+      project_category_custom:
+        createProjectDto.projectCategory === 'other'
+          ? createProjectDto.projectCategoryOther
+          : null,
       project_objective: createProjectDto.projectObjective,
       business_requirements: createProjectDto.businessRequirements,
       technical_requirements: createProjectDto.technicalRequirements || null,
@@ -81,13 +103,19 @@ export class ProjectsService {
 
     // 6. Set budget fields based on budget type
     if (createProjectDto.budgetType === 'single') {
-      projectData.budget_amount = parseFloat(createProjectDto.totalBudget.replace(/,/g, ''));
+      projectData.budget_amount = parseFloat(
+        createProjectDto.totalBudget.replace(/,/g, ''),
+      );
       projectData.budget_min = null;
       projectData.budget_max = null;
     } else if (createProjectDto.budgetType === 'range') {
       projectData.budget_amount = null;
-      projectData.budget_min = parseFloat(createProjectDto.minBudget.replace(/,/g, ''));
-      projectData.budget_max = parseFloat(createProjectDto.maxBudget.replace(/,/g, ''));
+      projectData.budget_min = parseFloat(
+        createProjectDto.minBudget.replace(/,/g, ''),
+      );
+      projectData.budget_max = parseFloat(
+        createProjectDto.maxBudget.replace(/,/g, ''),
+      );
     }
 
     // 7. Set submitted_at timestamp if status is submitted
@@ -118,7 +146,9 @@ export class ProjectsService {
       });
 
       await this.projectFilesRepository.save(fileRecords);
-      console.log(`✅ Saved ${fileRecords.length} file(s) for project ${savedProject.id}`);
+      console.log(
+        `✅ Saved ${fileRecords.length} file(s) for project ${savedProject.id}`,
+      );
     }
 
     // 10. Find matching vendors based on project criteria

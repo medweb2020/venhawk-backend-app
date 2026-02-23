@@ -11,7 +11,12 @@ import { VendorsModule } from '../vendors/vendors.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Project, ClientIndustry, ProjectCategory, ProjectFile]),
+    TypeOrmModule.forFeature([
+      Project,
+      ClientIndustry,
+      ProjectCategory,
+      ProjectFile,
+    ]),
     UsersModule,
     VendorsModule,
   ],

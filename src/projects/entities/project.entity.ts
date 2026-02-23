@@ -1,4 +1,13 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, Index } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  JoinColumn,
+  Index,
+} from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { ClientIndustry } from './client-industry.entity';
 import { ProjectCategory } from './project-category.entity';
@@ -11,13 +20,23 @@ export class Project {
   @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id: number;
 
-  @Column({ type: 'bigint', unsigned: true, nullable: false, comment: 'Foreign key to users.id' })
+  @Column({
+    type: 'bigint',
+    unsigned: true,
+    nullable: false,
+    comment: 'Foreign key to users.id',
+  })
   user_id: number;
 
   @Column({ type: 'varchar', length: 500, nullable: false })
   project_title: string;
 
-  @Column({ type: 'varchar', length: 180, nullable: false, comment: 'System name for the project' })
+  @Column({
+    type: 'varchar',
+    length: 180,
+    nullable: false,
+    comment: 'System name for the project',
+  })
   system_name: string;
 
   @Column({ type: 'int', nullable: false })
@@ -26,7 +45,12 @@ export class Project {
   @Column({ type: 'int', nullable: false })
   project_category_id: number;
 
-  @Column({ type: 'varchar', length: 500, nullable: true, comment: 'Custom category when category is Other' })
+  @Column({
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+    comment: 'Custom category when category is Other',
+  })
   project_category_custom: string;
 
   @Column({ type: 'text', nullable: false })
@@ -50,25 +74,58 @@ export class Project {
   @Column({ type: 'enum', enum: ['single', 'range'], nullable: false })
   budget_type: string;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, nullable: true, comment: 'Used when budget_type = single' })
+  @Column({
+    type: 'decimal',
+    precision: 15,
+    scale: 2,
+    nullable: true,
+    comment: 'Used when budget_type = single',
+  })
   budget_amount: number;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, nullable: true, comment: 'Used when budget_type = range' })
+  @Column({
+    type: 'decimal',
+    precision: 15,
+    scale: 2,
+    nullable: true,
+    comment: 'Used when budget_type = range',
+  })
   budget_min: number;
 
-  @Column({ type: 'decimal', precision: 15, scale: 2, nullable: true, comment: 'Used when budget_type = range' })
+  @Column({
+    type: 'decimal',
+    precision: 15,
+    scale: 2,
+    nullable: true,
+    comment: 'Used when budget_type = range',
+  })
   budget_max: number;
 
   @Column({ type: 'varchar', length: 3, default: 'USD' })
   budget_currency: string;
 
-  @Column({ type: 'enum', enum: ['draft', 'submitted', 'in_review', 'approved', 'rejected', 'completed'], default: 'draft' })
+  @Column({
+    type: 'enum',
+    enum: [
+      'draft',
+      'submitted',
+      'in_review',
+      'approved',
+      'rejected',
+      'completed',
+    ],
+    default: 'draft',
+  })
   status: string;
 
   @CreateDateColumn({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 
-  @UpdateDateColumn({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
+  @UpdateDateColumn({
+    type: 'timestamp',
+    default: () => 'CURRENT_TIMESTAMP',
+    onUpdate: 'CURRENT_TIMESTAMP',
+  })
   updated_at: Date;
 
   @Column({ type: 'timestamp', nullable: true })
@@ -78,15 +135,18 @@ export class Project {
   deleted_at: Date;
 
   // Relations
-  @ManyToOne(() => User, user => user.projects, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, (user) => user.projects, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
 
-  @ManyToOne(() => ClientIndustry, clientIndustry => clientIndustry.projects)
+  @ManyToOne(() => ClientIndustry, (clientIndustry) => clientIndustry.projects)
   @JoinColumn({ name: 'client_industry_id' })
   clientIndustry: ClientIndustry;
 
-  @ManyToOne(() => ProjectCategory, projectCategory => projectCategory.projects)
+  @ManyToOne(
+    () => ProjectCategory,
+    (projectCategory) => projectCategory.projects,
+  )
   @JoinColumn({ name: 'project_category_id' })
   projectCategory: ProjectCategory;
 }
