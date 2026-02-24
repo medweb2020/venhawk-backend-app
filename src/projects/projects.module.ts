@@ -11,6 +11,7 @@ import { VendorsModule } from '../vendors/vendors.module';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { ProjectVendorMatch } from './entities/project-vendor-match.entity';
 import { ProjectRecommendationsService } from './services/project-recommendations.service';
+import { ProjectRecommendationReasoningService } from './services/project-recommendation-reasoning.service';
 
 @Module({
   imports: [
@@ -26,7 +27,11 @@ import { ProjectRecommendationsService } from './services/project-recommendation
     VendorsModule,
   ],
   controllers: [ProjectsController],
-  providers: [ProjectsService, ProjectRecommendationsService],
+  providers: [
+    ProjectsService,
+    ProjectRecommendationsService,
+    ProjectRecommendationReasoningService,
+  ],
   exports: [ProjectsService],
 })
 export class ProjectsModule {}

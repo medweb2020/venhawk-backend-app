@@ -8,6 +8,12 @@ import { VendorResponseDto } from '../../vendors/dto/vendor-response.dto';
 import { ProjectRecommendationsResponseDto } from '../dto/project-recommendations-response.dto';
 import { VendorsService } from '../../vendors/vendors.service';
 import { VendorListingFiltersDto } from '../../vendors/dto/vendor-listing-filters.dto';
+import {
+  MatchReason,
+  ProjectRecommendationReasoningService,
+  RecommendationProjectReasoningInput,
+  RecommendationVendorReasoningInput,
+} from './project-recommendation-reasoning.service';
 
 interface DimensionScore {
   points: number;
@@ -24,7 +30,7 @@ interface VendorRecommendationResult {
 @Injectable()
 export class ProjectRecommendationsService {
   private readonly ACTIVE_VENDOR_STATUSES = ['Prospect', 'Validated', 'Active'];
-  private readonly SCORING_VERSION = 'v2';
+  private readonly SCORING_VERSION = 'v6';
   private readonly BASE_RECOMMENDATION_LIMIT = 6;
   private readonly OVERFLOW_DISPLAY_SCORE_THRESHOLD = 70;
   private readonly MAX_RAW_SCORE = 98;
@@ -64,6 +70,7 @@ export class ProjectRecommendationsService {
     @InjectRepository(ProjectVendorMatch)
     private readonly projectVendorMatchesRepository: Repository<ProjectVendorMatch>,
     private readonly vendorsService: VendorsService,
+    private readonly projectRecommendationReasoningService: ProjectRecommendationReasoningService,
   ) {}
 
   async computeAndStoreRecommendations(
@@ -99,19 +106,23 @@ export class ProjectRecommendationsService {
           Number(result.displayScore) > this.OVERFLOW_DISPLAY_SCORE_THRESHOLD,
       );
     const scored = [...primary, ...overflow];
+    const reasoningByVendorId =
+      await this.projectRecommendationReasoningService.generateTopMatchReasons(
+        this.toProjectReasoningInput(project),
+        scored.map((result) => this.toReasoningVendorInput(result)),
+      );
 
     const computedAt = new Date();
     const records = scored.map((result, index) =>
-      this.projectVendorMatchesRepository.create({
-        project_id: project.id,
-        vendor_id: result.vendor.id,
-        rank_position: index + 1,
-        raw_score: Number(result.rawScore.toFixed(2)),
-        display_score: result.displayScore,
-        score_breakdown_json: result.breakdown,
-        scoring_version: this.SCORING_VERSION,
-        computed_at: computedAt,
-      }),
+      this.projectVendorMatchesRepository.create(
+        this.toStoredRecommendationRecord(
+          project.id,
+          result,
+          index + 1,
+          computedAt,
+          reasoningByVendorId.get(result.vendor.id) || null,
+        ),
+      ),
     );
 
     await this.projectVendorMatchesRepository.manager.transaction(
@@ -133,7 +144,11 @@ export class ProjectRecommendationsService {
           result.vendor,
           result.displayScore,
           result.rawScore,
-          result.breakdown,
+          this.attachReasonToBreakdown(
+            result.breakdown,
+            reasoningByVendorId.get(result.vendor.id) || null,
+          ),
+          reasoningByVendorId.get(result.vendor.id) || null,
         ),
       ),
     };
@@ -180,15 +195,22 @@ export class ProjectRecommendationsService {
       scoringVersion,
       computedAt,
       totalRecommended: matches.length,
-      recommendedVendors: matches.map((match) =>
-        this.toVendorResponseDto(
+      recommendedVendors: matches.map((match) => {
+        const scoreBreakdown = (match.score_breakdown_json || {}) as Record<
+          string,
+          unknown
+        >;
+        const matchReason = this.extractMatchReason(scoreBreakdown);
+
+        return this.toVendorResponseDto(
           match.vendor,
           match.display_score,
           Number(match.raw_score),
-          match.score_breakdown_json || {},
+          scoreBreakdown,
+          matchReason,
           scoringVersion,
-        ),
-      ),
+        );
+      }),
     };
   }
 
@@ -201,7 +223,7 @@ export class ProjectRecommendationsService {
         id: projectId,
         user_id: userId,
       },
-      relations: ['projectCategory'],
+      relations: ['projectCategory', 'clientIndustry'],
     });
 
     if (!project) {
@@ -502,17 +524,171 @@ export class ProjectRecommendationsService {
     } as DimensionScore;
   }
 
+  private toProjectReasoningInput(
+    project: Project,
+  ): RecommendationProjectReasoningInput {
+    return {
+      projectTitle: String(project.project_title || ''),
+      industry: String(
+        project.clientIndustry?.label || project.clientIndustry?.value || '',
+      ),
+      category: String(
+        project.projectCategory?.label || project.projectCategory?.value || '',
+      ),
+      systemName: String(project.system_name || ''),
+      projectObjective: String(project.project_objective || ''),
+      businessRequirements: String(project.business_requirements || ''),
+      technicalRequirements: String(project.technical_requirements || ''),
+    };
+  }
+
+  private toReasoningVendorInput(
+    result: VendorRecommendationResult,
+  ): RecommendationVendorReasoningInput {
+    const vendor = result.vendor;
+    const ratingSignals = this.extractRatingSignals(vendor);
+    const caseStudyCount = Math.max(
+      this.toNumber(vendor.case_study_count_public),
+      this.toNumber(vendor.legal_case_studies_count),
+    );
+
+    return {
+      vendorId: vendor.id,
+      vendorName: String(vendor.brand_name || ''),
+      matchingScore: result.displayScore,
+      tier: vendor.listing_tier || this.calculateTier(vendor),
+      legalFocusLevel: String(vendor.legal_focus_level || 'Some'),
+      specialty: String(vendor.listing_specialty || this.determineSpecialty(vendor)),
+      serviceDomains: this.parseCsvValues(vendor.service_domains, 3),
+      legalTechStack: this.parseCsvValues(vendor.legal_tech_stack, 4),
+      topStrengths: this.extractTopStrengthLabels(result.breakdown),
+      partnerSignals: this.extractPartnerSignals(vendor),
+      rating: ratingSignals.rating,
+      reviewCount: ratingSignals.reviewCount,
+      caseStudyCount,
+    };
+  }
+
+  private toStoredRecommendationRecord(
+    projectId: number,
+    result: VendorRecommendationResult,
+    rankPosition: number,
+    computedAt: Date,
+    matchReason: MatchReason | null,
+  ): Partial<ProjectVendorMatch> {
+    return {
+      project_id: projectId,
+      vendor_id: result.vendor.id,
+      rank_position: rankPosition,
+      raw_score: Number(result.rawScore.toFixed(2)),
+      display_score: result.displayScore,
+      score_breakdown_json: this.attachReasonToBreakdown(result.breakdown, matchReason),
+      scoring_version: this.SCORING_VERSION,
+      computed_at: computedAt,
+    };
+  }
+
+  private attachReasonToBreakdown(
+    scoreBreakdown: Record<string, unknown>,
+    matchReason: MatchReason | null,
+  ): Record<string, unknown> {
+    if (!matchReason?.text) {
+      return scoreBreakdown;
+    }
+
+    return {
+      ...scoreBreakdown,
+      matchingReason: matchReason.text,
+      matchingReasonSource: matchReason.source,
+    };
+  }
+
+  private extractMatchReason(
+    scoreBreakdown: Record<string, unknown>,
+  ): MatchReason | null {
+    const reasonRaw = scoreBreakdown['matchingReason'];
+    if (typeof reasonRaw !== 'string' || !reasonRaw.trim()) {
+      return null;
+    }
+
+    const sourceRaw = scoreBreakdown['matchingReasonSource'];
+    const source = sourceRaw === 'openai' ? 'openai' : 'fallback';
+
+    return {
+      text: reasonRaw.trim(),
+      source,
+    };
+  }
+
+  private extractTopStrengthLabels(
+    breakdown: Record<string, unknown>,
+  ): string[] {
+    const dimensions = [
+      { key: 'capability', label: 'capability fit' },
+      { key: 'system', label: 'system alignment' },
+      { key: 'pricing', label: 'budget fit' },
+      { key: 'timeline', label: 'timeline readiness' },
+      { key: 'proofReviews', label: 'proof and reviews' },
+      { key: 'certifications', label: 'security certifications' },
+      { key: 'ilta', label: 'ILTA presence' },
+    ];
+
+    const normalizedDimensionScores = dimensions
+      .map((dimension) => {
+        const value = breakdown[dimension.key] as
+          | Record<string, unknown>
+          | undefined;
+        const points = this.toNumber(value?.points);
+        const maxPoints = this.toNumber(value?.maxPoints);
+        const normalized = maxPoints > 0 ? points / maxPoints : 0;
+
+        return {
+          label: dimension.label,
+          points,
+          normalized,
+        };
+      })
+      .filter((dimension) => dimension.points > 0)
+      .sort((a, b) => {
+        if (b.normalized !== a.normalized) {
+          return b.normalized - a.normalized;
+        }
+
+        return b.points - a.points;
+      });
+
+    return normalizedDimensionScores.slice(0, 2).map((entry) => entry.label);
+  }
+
+  private extractPartnerSignals(vendor: Vendor): string[] {
+    const signals: string[] = [];
+    if (vendor.is_microsoft_partner) signals.push('Microsoft Partner');
+    if (vendor.is_servicenow_partner) signals.push('ServiceNow Partner');
+    if (vendor.is_workday_partner) signals.push('Workday Partner');
+    if (vendor.ilta_present) signals.push('ILTA Presence');
+    return signals;
+  }
+
+  private parseCsvValues(value: string, limit: number): string[] {
+    return String(value || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, limit);
+  }
+
   private toVendorResponseDto(
     vendor: Vendor,
     matchingScore: number,
     rawScore: number,
     scoreBreakdown: Record<string, unknown>,
+    matchReason: MatchReason | null = null,
     scoringVersion = this.SCORING_VERSION,
   ): VendorResponseDto {
     const tier = vendor.listing_tier || this.calculateTier(vendor);
     const logo = this.generateLogo(vendor.brand_name);
 
-    return {
+    const response: VendorResponseDto = {
       id: vendor.id,
       vendorId: vendor.vendor_id,
       name: vendor.brand_name,
@@ -531,6 +707,13 @@ export class ProjectRecommendationsService {
       scoringVersion,
       scoreBreakdown,
     };
+
+    if (matchReason?.text) {
+      response.matchingReason = matchReason.text;
+      response.matchingReasonSource = matchReason.source;
+    }
+
+    return response;
   }
 
   private resolveProjectBudget(project: Project): number | null {
