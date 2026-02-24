@@ -1,4 +1,11 @@
-import { Entity, Column, PrimaryGeneratedColumn, ManyToOne, JoinColumn, CreateDateColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
+} from 'typeorm';
 import { Project } from '../../projects/entities/project.entity';
 
 @Entity('project_files')
@@ -24,7 +31,12 @@ export class ProjectFile {
   @CreateDateColumn({ type: 'timestamp' })
   uploaded_at: Date;
 
-  @Column({ type: 'timestamp', nullable: true, default: null, comment: 'Soft delete timestamp' })
+  @Column({
+    type: 'timestamp',
+    nullable: true,
+    default: null,
+    comment: 'Soft delete timestamp',
+  })
   deleted_at: Date | null;
 
   @ManyToOne(() => Project, { onDelete: 'CASCADE' })

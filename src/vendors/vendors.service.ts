@@ -1,9 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
 import { Vendor } from './entities/vendor.entity';
 import { VendorResponseDto } from './dto/vendor-response.dto';
 import { VendorListingResponseDto } from './dto/vendor-listing-response.dto';
+import { VendorListingFiltersDto } from './dto/vendor-listing-filters.dto';
+import { VendorListingFilterOptionsResponseDto } from './dto/vendor-listing-filter-options-response.dto';
+import {
+  VENDOR_FILTER_ALLOWED_VALUES,
+  VENDOR_FILTER_GROUPS,
+  VendorFilterGroupKey,
+} from './constants/vendor-filters.constants';
 
 interface ProjectCriteria {
   projectCategory: string;
@@ -15,9 +22,153 @@ interface ProjectCriteria {
   endDate?: string;
 }
 
+interface VendorListingFilters {
+  coreCapabilities: string[];
+  industryExperience: string[];
+  startTimeline: string[];
+  verifiedCertifications: string[];
+  clientValidation: string[];
+}
+
 @Injectable()
 export class VendorsService {
   private readonly LISTING_STATUSES = ['Prospect', 'Validated', 'Active'];
+  private readonly SEARCHABLE_VENDOR_TEXT_SQL = `LOWER(CONCAT_WS(' ',
+    COALESCE(vendor.brand_name, ''),
+    COALESCE(vendor.vendor_type, ''),
+    COALESCE(vendor.listing_specialty, ''),
+    COALESCE(vendor.listing_description, ''),
+    COALESCE(vendor.service_domains, ''),
+    COALESCE(vendor.platforms_experience, ''),
+    COALESCE(vendor.legal_tech_stack, ''),
+    COALESCE(vendor.security_notes, ''),
+    COALESCE(vendor.data_source_notes, ''),
+    COALESCE(vendor.internal_notes, '')
+  ))`;
+
+  private readonly CORE_CAPABILITY_KEYWORDS: Record<string, string[]> = {
+    'document-management-systems': [
+      'document management',
+      'dms',
+      'sharepoint',
+      'netdocuments',
+      'imanage',
+    ],
+    'ediscovery-platforms': ['ediscovery', 'e-discovery', 'relativity', 'nuix'],
+    'practice-management-systems': [
+      'practice management',
+      'aderant',
+      'elite 3e',
+      'intapp',
+    ],
+    'erp-financial-systems': [
+      'erp',
+      'financial systems',
+      'sap',
+      'oracle',
+      'workday',
+      'dynamics',
+    ],
+    'cloud-migration': [
+      'cloud migration',
+      'cloud modernization',
+      'azure',
+      'aws',
+      'gcp',
+    ],
+    'data-migration': [
+      'data migration',
+      'archive migration',
+      'etl',
+      'data conversion',
+    ],
+    'cybersecurity-compliance': [
+      'cybersecurity',
+      'security',
+      'compliance',
+      'soc 2',
+      'iso 27001',
+      'zero trust',
+    ],
+    'ai-automation': [
+      'artificial intelligence',
+      'ai',
+      'automation',
+      'machine learning',
+    ],
+    'custom-application-development': [
+      'custom application',
+      'application development',
+      'software development',
+      'legacy modernization',
+    ],
+    'integration-apis': [
+      'integration',
+      'api',
+      'middleware',
+      'system integration',
+    ],
+  };
+
+  private readonly INDUSTRY_EXPERIENCE_KEYWORDS: Record<string, string[]> = {
+    legal: ['legal', 'law firm'],
+    'financial-services': [
+      'financial services',
+      'bank',
+      'asset management',
+      'fintech',
+    ],
+    healthcare: ['healthcare', 'health care', 'hospital', 'payer', 'provider'],
+    government: ['government', 'public sector', 'federal', 'state'],
+    'enterprise-corporate': ['enterprise', 'corporate', 'fortune'],
+    'technology-saas': ['technology', 'saas', 'software company', 'tech'],
+    insurance: ['insurance', 'insurer', 'carrier'],
+    other: ['other'],
+  };
+
+  private readonly TIMELINE_CONDITIONS: Record<string, string> = {
+    'immediate-0-30-days':
+      '(vendor.lead_time_weeks IS NULL OR vendor.lead_time_weeks <= 4)',
+    '30-60-days':
+      '(vendor.lead_time_weeks IS NULL OR vendor.lead_time_weeks <= 8)',
+    '60-plus-days': '1 = 1',
+  };
+
+  private readonly CERTIFICATION_CONDITIONS: Record<string, string> = {
+    'iso-27001': "vendor.has_iso27001 = 'Y'",
+    'soc-2': "vendor.has_soc2 = 'Y'",
+  };
+
+  private readonly CERTIFICATION_KEYWORDS: Record<string, string[]> = {
+    'microsoft-partner': ['microsoft partner', 'microsoft gold'],
+    'aws-partner': ['aws partner', 'amazon web services partner'],
+    'google-cloud-partner': ['google cloud partner', 'gcp partner'],
+    'industry-certifications': [
+      'relativity',
+      'epic',
+      'servicenow',
+      'certified',
+    ],
+    'ilta-member': ['ilta', 'international legal technology association'],
+  };
+
+  private readonly CLIENT_VALIDATION_CONDITIONS: Record<string, string> = {
+    'case-studies-available':
+      '(vendor.case_study_count_public > 0 OR vendor.legal_case_studies_count > 0)',
+    'reference-clients-available':
+      "(vendor.reference_available = 'Y' OR vendor.legal_references_available = 'Y')",
+    'five-plus-projects-completed':
+      '(vendor.case_study_count_public >= 5 OR vendor.legal_case_studies_count >= 5 OR vendor.legal_delivery_years >= 5)',
+    'repeat-clients':
+      "(vendor.reference_available = 'Y' OR vendor.legal_references_available = 'Y' OR vendor.case_study_count_public >= 3 OR vendor.legal_case_studies_count >= 3)",
+    'fortune-500-clients':
+      "(vendor.company_size_band LIKE '%1000+%' OR vendor.company_size_band LIKE '%10000+%' OR vendor.company_size_band LIKE '%25000+%' OR vendor.company_size_band LIKE '%300000+%' OR (vendor.reference_available = 'Y' AND vendor.case_study_count_public >= 5) OR (vendor.legal_references_available = 'Y' AND vendor.legal_case_studies_count >= 5))",
+  };
+
+  private readonly CLIENT_VALIDATION_KEYWORDS: Record<string, string[]> = {
+    'repeat-clients': ['repeat client', 'repeat clients', 'retainer'],
+    'fortune-500-clients': ['fortune 500', 'fortune500'],
+  };
 
   // Matching weights as per requirement
   private readonly WEIGHTS = {
@@ -35,12 +186,32 @@ export class VendorsService {
     private vendorsRepository: Repository<Vendor>,
   ) {}
 
-  async getListingVendors(): Promise<VendorListingResponseDto[]> {
-    const vendors = await this.vendorsRepository
+  async getListingFilterOptions(): Promise<VendorListingFilterOptionsResponseDto> {
+    return {
+      groups: VENDOR_FILTER_GROUPS.map((group) => ({
+        key: group.key,
+        label: group.label,
+        options: group.options.map((option) => ({
+          value: option.value,
+          label: option.label,
+        })),
+      })),
+    };
+  }
+
+  async getListingVendors(
+    filtersDto?: VendorListingFiltersDto,
+  ): Promise<VendorListingResponseDto[]> {
+    const filters = this.normalizeListingFilters(filtersDto);
+    const queryBuilder = this.vendorsRepository
       .createQueryBuilder('vendor')
       .where('vendor.status IN (:...statuses)', {
         statuses: this.LISTING_STATUSES,
-      })
+      });
+
+    this.applyListingFilters(queryBuilder, filters);
+
+    const vendors = await queryBuilder
       .orderBy(
         'CASE WHEN vendor.listing_order IS NULL THEN 1 ELSE 0 END',
         'ASC',
@@ -49,9 +220,7 @@ export class VendorsService {
       .addOrderBy('vendor.brand_name', 'ASC')
       .getMany();
 
-    return vendors.map((vendor) =>
-      this.transformToListingResponseDto(vendor),
-    );
+    return vendors.map((vendor) => this.transformToListingResponseDto(vendor));
   }
 
   async getListingVendorById(
@@ -70,6 +239,188 @@ export class VendorsService {
     }
 
     return this.transformToListingResponseDto(vendor);
+  }
+
+  private normalizeListingFilters(
+    filtersDto?: VendorListingFiltersDto,
+  ): VendorListingFilters {
+    const normalizeFilterValues = (key: VendorFilterGroupKey): string[] => {
+      const rawValues = Array.isArray(filtersDto?.[key]) ? filtersDto[key] : [];
+      const allowedValues = VENDOR_FILTER_ALLOWED_VALUES[key];
+
+      return Array.from(
+        new Set(
+          rawValues
+            .map((value) => String(value).trim().toLowerCase())
+            .filter((value) => allowedValues.has(value)),
+        ),
+      );
+    };
+
+    return {
+      coreCapabilities: normalizeFilterValues('coreCapabilities'),
+      industryExperience: normalizeFilterValues('industryExperience'),
+      startTimeline: normalizeFilterValues('startTimeline'),
+      verifiedCertifications: normalizeFilterValues('verifiedCertifications'),
+      clientValidation: normalizeFilterValues('clientValidation'),
+    };
+  }
+
+  private applyListingFilters(
+    queryBuilder: SelectQueryBuilder<Vendor>,
+    filters: VendorListingFilters,
+  ): void {
+    const groupConditions: Brackets[] = [];
+
+    const coreCapabilitiesCondition = this.buildKeywordBasedFilter(
+      filters.coreCapabilities,
+      this.CORE_CAPABILITY_KEYWORDS,
+      'core_capability',
+    );
+    if (coreCapabilitiesCondition) {
+      groupConditions.push(coreCapabilitiesCondition);
+    }
+
+    const industryExperienceCondition = this.buildKeywordBasedFilter(
+      filters.industryExperience,
+      this.INDUSTRY_EXPERIENCE_KEYWORDS,
+      'industry_experience',
+    );
+    if (industryExperienceCondition) {
+      groupConditions.push(industryExperienceCondition);
+    }
+
+    const startTimelineCondition = this.buildClauseBasedFilter(
+      filters.startTimeline,
+      this.TIMELINE_CONDITIONS,
+    );
+    if (startTimelineCondition) {
+      groupConditions.push(startTimelineCondition);
+    }
+
+    const verifiedCertificationsCondition = this.buildMixedFilter(
+      filters.verifiedCertifications,
+      this.CERTIFICATION_CONDITIONS,
+      this.CERTIFICATION_KEYWORDS,
+      'verified_certifications',
+    );
+    if (verifiedCertificationsCondition) {
+      groupConditions.push(verifiedCertificationsCondition);
+    }
+
+    const clientValidationCondition = this.buildMixedFilter(
+      filters.clientValidation,
+      this.CLIENT_VALIDATION_CONDITIONS,
+      this.CLIENT_VALIDATION_KEYWORDS,
+      'client_validation',
+    );
+    if (clientValidationCondition) {
+      groupConditions.push(clientValidationCondition);
+    }
+
+    if (groupConditions.length === 0) {
+      return;
+    }
+
+    queryBuilder.andWhere(
+      new Brackets((groupBuilder) => {
+        groupConditions.forEach((condition) => {
+          groupBuilder.orWhere(condition);
+        });
+      }),
+    );
+  }
+
+  private buildClauseBasedFilter(
+    selectedValues: string[],
+    clauseMap: Record<string, string>,
+  ): Brackets | null {
+    const matchedClauses = selectedValues
+      .map((selectedValue) => clauseMap[selectedValue])
+      .filter(Boolean);
+
+    if (matchedClauses.length === 0) {
+      return null;
+    }
+
+    return new Brackets((clauseBuilder) => {
+      matchedClauses.forEach((clause) => {
+        clauseBuilder.orWhere(clause);
+      });
+    });
+  }
+
+  private buildKeywordBasedFilter(
+    selectedValues: string[],
+    keywordMap: Record<string, string[]>,
+    parameterPrefix: string,
+  ): Brackets | null {
+    const matchedKeywords = selectedValues
+      .map((selectedValue) => keywordMap[selectedValue])
+      .filter((keywords) => Array.isArray(keywords) && keywords.length > 0);
+
+    if (matchedKeywords.length === 0) {
+      return null;
+    }
+
+    return new Brackets((groupBuilder) => {
+      matchedKeywords.forEach((keywords, selectedIndex) => {
+        groupBuilder.orWhere(
+          new Brackets((keywordBuilder) => {
+            keywords.forEach((keyword, keywordIndex) => {
+              const parameterName = `${parameterPrefix}_${selectedIndex}_${keywordIndex}`;
+              keywordBuilder.orWhere(
+                `${this.SEARCHABLE_VENDOR_TEXT_SQL} LIKE :${parameterName}`,
+                {
+                  [parameterName]: `%${keyword.toLowerCase()}%`,
+                },
+              );
+            });
+          }),
+        );
+      });
+    });
+  }
+
+  private buildMixedFilter(
+    selectedValues: string[],
+    clauseMap: Record<string, string>,
+    keywordMap: Record<string, string[]>,
+    parameterPrefix: string,
+  ): Brackets | null {
+    const matchedClauses = selectedValues
+      .map((selectedValue) => clauseMap[selectedValue])
+      .filter(Boolean);
+
+    const matchedKeywords = selectedValues
+      .map((selectedValue) => keywordMap[selectedValue])
+      .filter((keywords) => Array.isArray(keywords) && keywords.length > 0);
+
+    if (matchedClauses.length === 0 && matchedKeywords.length === 0) {
+      return null;
+    }
+
+    return new Brackets((groupBuilder) => {
+      matchedClauses.forEach((clause) => {
+        groupBuilder.orWhere(clause);
+      });
+
+      matchedKeywords.forEach((keywords, selectedIndex) => {
+        groupBuilder.orWhere(
+          new Brackets((keywordBuilder) => {
+            keywords.forEach((keyword, keywordIndex) => {
+              const parameterName = `${parameterPrefix}_${selectedIndex}_${keywordIndex}`;
+              keywordBuilder.orWhere(
+                `${this.SEARCHABLE_VENDOR_TEXT_SQL} LIKE :${parameterName}`,
+                {
+                  [parameterName]: `%${keyword.toLowerCase()}%`,
+                },
+              );
+            });
+          }),
+        );
+      });
+    });
   }
 
   async findMatchingVendors(

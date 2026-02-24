@@ -21,13 +21,17 @@ export function validateEnvironment() {
       missingVars.push(varName);
       console.error(`❌ Missing: ${varName}`);
     } else {
-      const shouldMask = varName.includes('PASSWORD') || varName.includes('KEY');
+      const shouldMask =
+        varName.includes('PASSWORD') || varName.includes('KEY');
       console.log(`✅ Found: ${varName} = ${shouldMask ? '***' : value}`);
     }
   });
 
   if (missingVars.length > 0) {
-    console.error('⚠️  WARNING: Missing required environment variables:', missingVars.join(', '));
+    console.error(
+      '⚠️  WARNING: Missing required environment variables:',
+      missingVars.join(', '),
+    );
     console.error('⚠️  App may not work correctly!');
     // Don't throw error in production to see other logs
     if (process.env.NODE_ENV !== 'production') {

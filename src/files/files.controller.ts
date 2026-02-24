@@ -29,7 +29,9 @@ export class FilesController {
       throw new BadRequestException('No file provided');
     }
 
-    console.log(`📤 Received file upload request: ${file.originalname} (${file.size} bytes)`);
+    console.log(
+      `📤 Received file upload request: ${file.originalname} (${file.size} bytes)`,
+    );
 
     return await this.filesService.uploadFile(file);
   }

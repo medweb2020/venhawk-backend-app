@@ -1,4 +1,10 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, OneToMany } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  OneToMany,
+} from 'typeorm';
 import { Project } from './project.entity';
 
 @Entity('client_industries')
@@ -15,6 +21,6 @@ export class ClientIndustry {
   @CreateDateColumn({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 
-  @OneToMany(() => Project, project => project.clientIndustry)
+  @OneToMany(() => Project, (project) => project.clientIndustry)
   projects: Project[];
 }

@@ -31,7 +31,14 @@ import { Vendor } from './vendors/entities/vendor.entity';
         username: configService.get('DB_USERNAME'),
         password: configService.get('DB_PASSWORD'),
         database: configService.get('DB_DATABASE'),
-        entities: [User, Project, ClientIndustry, ProjectCategory, ProjectFile, Vendor],
+        entities: [
+          User,
+          Project,
+          ClientIndustry,
+          ProjectCategory,
+          ProjectFile,
+          Vendor,
+        ],
         synchronize: false, // Use manual migrations
       }),
       inject: [ConfigService],

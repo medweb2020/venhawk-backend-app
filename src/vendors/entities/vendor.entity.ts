@@ -1,4 +1,11 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+  Index,
+} from 'typeorm';
 
 @Entity('vendors')
 @Index('idx_brand_name', ['brand_name'])
@@ -66,7 +73,11 @@ export class Vendor {
   @Column({ type: 'text', nullable: true })
   platforms_experience: string;
 
-  @Column({ type: 'text', nullable: true, comment: 'iManage, NetDocuments, Intapp, etc.' })
+  @Column({
+    type: 'text',
+    nullable: true,
+    comment: 'iManage, NetDocuments, Intapp, etc.',
+  })
   legal_tech_stack: string;
 
   // PROJECT & PRICING
@@ -133,7 +144,11 @@ export class Vendor {
   rating_url_2: string;
 
   // LEGAL SPECIALIZATION
-  @Column({ type: 'enum', enum: ['None', 'Some', 'Strong', 'Legal-only'], default: 'Some' })
+  @Column({
+    type: 'enum',
+    enum: ['None', 'Some', 'Strong', 'Legal-only'],
+    default: 'Some',
+  })
   legal_focus_level: string;
 
   @Column({ type: 'text', nullable: true })
@@ -171,7 +186,11 @@ export class Vendor {
   @Column({ type: 'date', nullable: false })
   last_verified_date: Date;
 
-  @Column({ type: 'enum', enum: ['Prospect', 'Validated', 'Active', 'Inactive', 'Do-not-use'], default: 'Prospect' })
+  @Column({
+    type: 'enum',
+    enum: ['Prospect', 'Validated', 'Active', 'Inactive', 'Do-not-use'],
+    default: 'Prospect',
+  })
   status: string;
 
   @Column({ type: 'text', nullable: true })
@@ -181,6 +200,10 @@ export class Vendor {
   @CreateDateColumn({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   created_at: Date;
 
-  @UpdateDateColumn({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP', onUpdate: 'CURRENT_TIMESTAMP' })
+  @UpdateDateColumn({
+    type: 'timestamp',
+    default: () => 'CURRENT_TIMESTAMP',
+    onUpdate: 'CURRENT_TIMESTAMP',
+  })
   updated_at: Date;
 }
