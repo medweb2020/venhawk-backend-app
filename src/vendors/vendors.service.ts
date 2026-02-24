@@ -223,6 +223,14 @@ export class VendorsService {
     return vendors.map((vendor) => this.transformToListingResponseDto(vendor));
   }
 
+  applyListingFiltersToQueryBuilder(
+    queryBuilder: SelectQueryBuilder<any>,
+    filtersDto?: VendorListingFiltersDto,
+  ): void {
+    const filters = this.normalizeListingFilters(filtersDto);
+    this.applyListingFilters(queryBuilder, filters);
+  }
+
   async getListingVendorById(
     vendorId: string,
   ): Promise<VendorListingResponseDto> {
@@ -764,6 +772,7 @@ export class VendorsService {
 
     return {
       id: vendor.id,
+      vendorId: vendor.vendor_id,
       name: vendor.brand_name,
       logo,
       logoUrl: vendor.logo_url || null,

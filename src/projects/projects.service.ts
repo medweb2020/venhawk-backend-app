@@ -11,8 +11,10 @@ import { ProjectCategory } from './entities/project-category.entity';
 import { ProjectFile } from '../files/entities/project-file.entity';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { CreateProjectResponseDto } from './dto/create-project-response.dto';
+import { ProjectRecommendationsResponseDto } from './dto/project-recommendations-response.dto';
 import { UsersService } from '../users/users.service';
-import { VendorsService } from '../vendors/vendors.service';
+import { ProjectRecommendationsService } from './services/project-recommendations.service';
+import { VendorListingFiltersDto } from '../vendors/dto/vendor-listing-filters.dto';
 
 @Injectable()
 export class ProjectsService {
@@ -26,7 +28,7 @@ export class ProjectsService {
     @InjectRepository(ProjectFile)
     private projectFilesRepository: Repository<ProjectFile>,
     private usersService: UsersService,
-    private vendorsService: VendorsService,
+    private projectRecommendationsService: ProjectRecommendationsService,
   ) {}
 
   async create(
@@ -34,12 +36,7 @@ export class ProjectsService {
     auth0UserId: string,
   ): Promise<CreateProjectResponseDto> {
     // 1. Lookup user by Auth0 ID
-    const user = await this.usersService.findByAuth0Id(auth0UserId);
-    if (!user) {
-      throw new NotFoundException(
-        `User with Auth0 ID '${auth0UserId}' not found. Please sync user first.`,
-      );
-    }
+    const user = await this.getUserOrThrow(auth0UserId);
 
     // 2. Lookup client industry ID
     const clientIndustry = await this.clientIndustriesRepository.findOne({
@@ -151,16 +148,13 @@ export class ProjectsService {
       );
     }
 
-    // 10. Find matching vendors based on project criteria
-    const matchedVendors = await this.vendorsService.findMatchingVendors(
-      createProjectDto.projectCategory,
-      createProjectDto.systemName,
-      projectData.budget_min,
-      projectData.budget_max,
-      projectData.budget_amount,
-      createProjectDto.startDate,
-      createProjectDto.endDate,
-    );
+    // 10. Compute and persist recommendations (kept in create response for backward compatibility)
+    const recommendations =
+      await this.projectRecommendationsService.computeAndStoreRecommendations(
+        savedProject.id,
+        user.id,
+      );
+    const matchedVendors = recommendations.recommendedVendors;
 
     // 11. Return project with matched vendors
     return {
@@ -173,5 +167,40 @@ export class ProjectsService {
       },
       matchedVendors,
     };
+  }
+
+  async generateRecommendations(
+    projectId: number,
+    auth0UserId: string,
+  ): Promise<ProjectRecommendationsResponseDto> {
+    const user = await this.getUserOrThrow(auth0UserId);
+    return this.projectRecommendationsService.computeAndStoreRecommendations(
+      projectId,
+      user.id,
+    );
+  }
+
+  async getRecommendations(
+    projectId: number,
+    auth0UserId: string,
+    filtersDto?: VendorListingFiltersDto,
+  ): Promise<ProjectRecommendationsResponseDto> {
+    const user = await this.getUserOrThrow(auth0UserId);
+    return this.projectRecommendationsService.getStoredRecommendations(
+      projectId,
+      user.id,
+      filtersDto,
+    );
+  }
+
+  private async getUserOrThrow(auth0UserId: string) {
+    const user = await this.usersService.findByAuth0Id(auth0UserId);
+    if (!user) {
+      throw new NotFoundException(
+        `User with Auth0 ID '${auth0UserId}' not found. Please sync user first.`,
+      );
+    }
+
+    return user;
   }
 }
