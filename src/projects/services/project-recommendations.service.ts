@@ -51,9 +51,21 @@ export class ProjectRecommendationsService {
   };
 
   private readonly CATEGORY_KEYWORDS: Record<string, string[]> = {
-    'legal-apps': ['legal', 'document management', 'imanage', 'netdocuments', 'intapp'],
+    'legal-apps': [
+      'legal',
+      'document management',
+      'imanage',
+      'netdocuments',
+      'intapp',
+    ],
     'cloud-migration': ['cloud', 'azure', 'aws', 'gcp', 'modernization'],
-    'enterprise-it': ['enterprise', 'servicenow', 'workday', 'microsoft 365', 'm365'],
+    'enterprise-it': [
+      'enterprise',
+      'servicenow',
+      'workday',
+      'microsoft 365',
+      'm365',
+    ],
     'app-upgrades': ['upgrade', 'integration', 'api', 'legacy modernization'],
     'app-bug-fixes': ['upgrade', 'integration', 'api', 'legacy modernization'],
     collaboration: ['collaboration', 'sharepoint', 'teams', 'microsoft 365'],
@@ -129,7 +141,9 @@ export class ProjectRecommendationsService {
 
     await this.projectVendorMatchesRepository.manager.transaction(
       async (entityManager) => {
-        await entityManager.delete(ProjectVendorMatch, { project_id: project.id });
+        await entityManager.delete(ProjectVendorMatch, {
+          project_id: project.id,
+        });
         if (records.length > 0) {
           await entityManager.save(ProjectVendorMatch, records);
         }
@@ -173,7 +187,12 @@ export class ProjectRecommendationsService {
       return this.computeAndStoreRecommendations(projectId, userId);
     }
 
-    if (this.projectChangedSinceComputation(project, latestStoredMatch.computed_at)) {
+    if (
+      this.projectChangedSinceComputation(
+        project,
+        latestStoredMatch.computed_at,
+      )
+    ) {
       await this.computeAndStoreRecommendations(projectId, userId);
       return this.getStoredRecommendations(projectId, userId, filtersDto);
     }
@@ -189,7 +208,10 @@ export class ProjectRecommendationsService {
       .where('match.project_id = :projectId', { projectId })
       .orderBy('match.rank_position', 'ASC');
 
-    this.vendorsService.applyListingFiltersToQueryBuilder(queryBuilder, filtersDto);
+    this.vendorsService.applyListingFiltersToQueryBuilder(
+      queryBuilder,
+      filtersDto,
+    );
 
     const matches = await queryBuilder.getMany();
 
@@ -240,7 +262,10 @@ export class ProjectRecommendationsService {
     return project;
   }
 
-  private scoreVendor(vendor: Vendor, project: Project): VendorRecommendationResult {
+  private scoreVendor(
+    vendor: Vendor,
+    project: Project,
+  ): VendorRecommendationResult {
     const capability = this.calculateCapabilityScore(vendor, project);
     const system = this.calculateSystemScore(vendor, project);
     const pricing = this.calculatePricingScore(vendor, project);
@@ -285,7 +310,10 @@ export class ProjectRecommendationsService {
     };
   }
 
-  private calculateCapabilityScore(vendor: Vendor, project: Project): DimensionScore {
+  private calculateCapabilityScore(
+    vendor: Vendor,
+    project: Project,
+  ): DimensionScore {
     const categoryValue = project.projectCategory?.value || '';
     const categoryKeywords =
       this.CATEGORY_KEYWORDS[categoryValue] || this.CATEGORY_KEYWORDS.other;
@@ -320,7 +348,10 @@ export class ProjectRecommendationsService {
     return { points, maxPoints: this.WEIGHTS.CAPABILITY };
   }
 
-  private calculateSystemScore(vendor: Vendor, project: Project): DimensionScore {
+  private calculateSystemScore(
+    vendor: Vendor,
+    project: Project,
+  ): DimensionScore {
     const systemName = (project.system_name || '').trim().toLowerCase();
     if (!systemName) {
       return {
@@ -352,17 +383,25 @@ export class ProjectRecommendationsService {
       .filter((token) => token.length > 2);
 
     if (tokens.length === 0) {
-      return { points: this.WEIGHTS.SYSTEM * 0.2, maxPoints: this.WEIGHTS.SYSTEM };
+      return {
+        points: this.WEIGHTS.SYSTEM * 0.2,
+        maxPoints: this.WEIGHTS.SYSTEM,
+      };
     }
 
-    const matchedTokens = tokens.filter((token) => vendorText.includes(token)).length;
+    const matchedTokens = tokens.filter((token) =>
+      vendorText.includes(token),
+    ).length;
     const normalized = matchedTokens / tokens.length;
     const points = this.pointsFromNormalized(normalized, this.WEIGHTS.SYSTEM);
 
     return { points, maxPoints: this.WEIGHTS.SYSTEM };
   }
 
-  private calculatePricingScore(vendor: Vendor, project: Project): DimensionScore {
+  private calculatePricingScore(
+    vendor: Vendor,
+    project: Project,
+  ): DimensionScore {
     const projectBudget = this.resolveProjectBudget(project);
     const vendorMin = this.toNumber(vendor.min_project_size_usd);
     const vendorMax = this.toNumber(vendor.max_project_size_usd);
@@ -394,7 +433,10 @@ export class ProjectRecommendationsService {
     return { points, maxPoints: this.WEIGHTS.PRICING };
   }
 
-  private calculateTimelineScore(vendor: Vendor, project: Project): DimensionScore {
+  private calculateTimelineScore(
+    vendor: Vendor,
+    project: Project,
+  ): DimensionScore {
     if (!project.start_date || !vendor.lead_time_weeks) {
       return {
         points: this.WEIGHTS.TIMELINE * 0.5,
@@ -440,9 +482,10 @@ export class ProjectRecommendationsService {
     else if (caseStudyCount >= 1) caseStudyPoints = caseStudyMaxPoints * 0.25;
 
     const points = Number(
-      Math.min(this.WEIGHTS.PROOF_REVIEWS, ratingPoints + caseStudyPoints).toFixed(
-        2,
-      ),
+      Math.min(
+        this.WEIGHTS.PROOF_REVIEWS,
+        ratingPoints + caseStudyPoints,
+      ).toFixed(2),
     );
     return { points, maxPoints: this.WEIGHTS.PROOF_REVIEWS };
   }
@@ -458,7 +501,8 @@ export class ProjectRecommendationsService {
       project.technical_requirements,
     );
 
-    const requiresSoc2 = projectText.includes('soc2') || projectText.includes('soc 2');
+    const requiresSoc2 =
+      projectText.includes('soc2') || projectText.includes('soc 2');
     const requiresIso27001 =
       projectText.includes('iso27001') || projectText.includes('iso 27001');
 
@@ -475,7 +519,10 @@ export class ProjectRecommendationsService {
     if (requiresIso27001 && vendor.has_iso27001 === 'Y') matched++;
 
     const normalized = matched / required;
-    const points = this.pointsFromNormalized(normalized, this.WEIGHTS.CERTIFICATIONS);
+    const points = this.pointsFromNormalized(
+      normalized,
+      this.WEIGHTS.CERTIFICATIONS,
+    );
     return { points, maxPoints: this.WEIGHTS.CERTIFICATIONS };
   }
 
@@ -493,7 +540,9 @@ export class ProjectRecommendationsService {
     const serviceNowPoints = vendor.is_servicenow_partner
       ? this.WEIGHTS.BONUS.SERVICENOW
       : 0;
-    const workdayPoints = vendor.is_workday_partner ? this.WEIGHTS.BONUS.WORKDAY : 0;
+    const workdayPoints = vendor.is_workday_partner
+      ? this.WEIGHTS.BONUS.WORKDAY
+      : 0;
 
     const totalPoints = microsoftPoints + serviceNowPoints + workdayPoints;
 
@@ -546,7 +595,9 @@ export class ProjectRecommendationsService {
       matchingScore: result.displayScore,
       tier: vendor.listing_tier || this.calculateTier(vendor),
       legalFocusLevel: String(vendor.legal_focus_level || 'Some'),
-      specialty: String(vendor.listing_specialty || this.determineSpecialty(vendor)),
+      specialty: String(
+        vendor.listing_specialty || this.determineSpecialty(vendor),
+      ),
       serviceDomains: this.parseCsvValues(vendor.service_domains, 3),
       legalTechStack: this.parseCsvValues(vendor.legal_tech_stack, 4),
       topStrengths: this.extractTopStrengthLabels(result.breakdown),
@@ -570,7 +621,10 @@ export class ProjectRecommendationsService {
       rank_position: rankPosition,
       raw_score: Number(result.rawScore.toFixed(2)),
       display_score: result.displayScore,
-      score_breakdown_json: this.attachReasonToBreakdown(result.breakdown, matchReason),
+      score_breakdown_json: this.attachReasonToBreakdown(
+        result.breakdown,
+        matchReason,
+      ),
       scoring_version: this.SCORING_VERSION,
       computed_at: computedAt,
     };
@@ -686,7 +740,8 @@ export class ProjectRecommendationsService {
       location: this.formatLocation(vendor),
       rating: Number(this.resolveRating(vendor)),
       tier,
-      description: vendor.listing_description || this.generateDescription(vendor),
+      description:
+        vendor.listing_description || this.generateDescription(vendor),
       specialty: vendor.listing_specialty || this.determineSpecialty(vendor),
       startFrom: this.formatStartFrom(vendor.min_project_size_usd),
       matchingScore,
@@ -757,7 +812,9 @@ export class ProjectRecommendationsService {
       return false;
     }
 
-    return new Date(project.updated_at).getTime() > new Date(computedAt).getTime();
+    return (
+      new Date(project.updated_at).getTime() > new Date(computedAt).getTime()
+    );
   }
 
   private pointsFromNormalized(normalized: number, maxPoints: number): number {
@@ -767,7 +824,11 @@ export class ProjectRecommendationsService {
 
   private toSearchText(...values: unknown[]): string {
     return values
-      .map((value) => String(value || '').trim().toLowerCase())
+      .map((value) =>
+        String(value || '')
+          .trim()
+          .toLowerCase(),
+      )
       .filter(Boolean)
       .join(' ');
   }
@@ -816,7 +877,9 @@ export class ProjectRecommendationsService {
   }
 
   private generateLogo(brandName: string): string {
-    const words = String(brandName || '').split(' ').filter(Boolean);
+    const words = String(brandName || '')
+      .split(' ')
+      .filter(Boolean);
     if (words.length >= 2) {
       return words
         .slice(0, 2)
@@ -825,7 +888,9 @@ export class ProjectRecommendationsService {
         .toUpperCase();
     }
 
-    return String(brandName || '').substring(0, 3).toUpperCase();
+    return String(brandName || '')
+      .substring(0, 3)
+      .toUpperCase();
   }
 
   private generateDescription(vendor: Vendor): string {

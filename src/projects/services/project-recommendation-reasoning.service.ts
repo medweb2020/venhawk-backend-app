@@ -48,7 +48,9 @@ interface ReasoningModelResponse {
 
 @Injectable()
 export class ProjectRecommendationReasoningService {
-  private readonly logger = new Logger(ProjectRecommendationReasoningService.name);
+  private readonly logger = new Logger(
+    ProjectRecommendationReasoningService.name,
+  );
   private readonly model: string;
   private readonly topMatchReasoningLimit = 3;
   private readonly maxReasonChars = 420;
@@ -59,7 +61,9 @@ export class ProjectRecommendationReasoningService {
     @InjectRepository(ProjectVendorReason)
     private readonly projectVendorReasonRepository: Repository<ProjectVendorReason>,
   ) {
-    const apiKey = String(this.configService.get<string>('OPENAI_API_KEY') || '').trim();
+    const apiKey = String(
+      this.configService.get<string>('OPENAI_API_KEY') || '',
+    ).trim();
     const timeoutMs = this.parseTimeoutMs(
       this.configService.get<string>('OPENAI_RECOMMENDATIONS_TIMEOUT_MS'),
     );
@@ -143,7 +147,10 @@ export class ProjectRecommendationReasoningService {
       });
     }
 
-    const generatedReasons = await this.generateOpenAiReasons(project, missingCandidates);
+    const generatedReasons = await this.generateOpenAiReasons(
+      project,
+      missingCandidates,
+    );
     const now = new Date();
     const upsertRows: Partial<ProjectVendorReason>[] = [];
 
@@ -255,7 +262,9 @@ export class ProjectRecommendationReasoningService {
   ): Map<number, string> {
     const response = this.parseJsonContent<ReasoningModelResponse>(rawContent);
     const parsed = new Map<number, string>();
-    const allowedVendorIds = new Set(candidates.map((candidate) => candidate.vendorId));
+    const allowedVendorIds = new Set(
+      candidates.map((candidate) => candidate.vendorId),
+    );
 
     if (!response || !Array.isArray(response.reasons)) {
       return parsed;
@@ -311,14 +320,18 @@ export class ProjectRecommendationReasoningService {
   }
 
   private sanitizeReason(reason: string): string {
-    const normalized = String(reason || '').replace(/\s+/g, ' ').trim();
+    const normalized = String(reason || '')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!normalized) {
       return '';
     }
 
     const sentenceMatches =
-      normalized.match(/[^.!?]+[.!?]?/g)?.map((item) => item.trim()).filter(Boolean) ||
-      [];
+      normalized
+        .match(/[^.!?]+[.!?]?/g)
+        ?.map((item) => item.trim())
+        .filter(Boolean) || [];
 
     const firstTwoSentences = sentenceMatches.slice(0, 2).join(' ').trim();
     const boundedBySentences = firstTwoSentences || normalized;
