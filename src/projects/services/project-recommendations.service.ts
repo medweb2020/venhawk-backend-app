@@ -843,6 +843,12 @@ export class ProjectRecommendationsService {
       maxRawScore: this.MAX_RAW_SCORE,
       weights: this.WEIGHTS,
       categoryKeywords: this.CATEGORY_KEYWORDS,
+      reasoningPolicy: {
+        topMatchesOnly: true,
+        topMatchLimit: 3,
+        minSentences: 2,
+        maxSentences: 3,
+      },
       scoringFns: {
         capability: this.calculateCapabilityScore.toString(),
         system: this.calculateSystemScore.toString(),

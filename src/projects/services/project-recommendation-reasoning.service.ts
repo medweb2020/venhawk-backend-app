@@ -53,6 +53,8 @@ export class ProjectRecommendationReasoningService {
   );
   private readonly model: string;
   private readonly topMatchReasoningLimit = 3;
+  private readonly minReasonSentences = 2;
+  private readonly maxReasonSentences = 3;
   private readonly maxReasonChars = 420;
   private readonly openAiClient: OpenAI | null;
 
@@ -97,13 +99,13 @@ export class ProjectRecommendationReasoningService {
       return new Map();
     }
 
-    const fallbackReasons = this.buildFallbackReasonMap(project, candidates);
-    const resolvedReasons = new Map<number, MatchReason>(fallbackReasons);
-
     const topCandidates = candidates.slice(0, this.topMatchReasoningLimit);
     if (topCandidates.length === 0) {
-      return resolvedReasons;
+      return new Map();
     }
+
+    const fallbackReasons = this.buildFallbackReasonMap(project, topCandidates);
+    const resolvedReasons = new Map<number, MatchReason>(fallbackReasons);
 
     const contextHashByVendorId = new Map<number, string>(
       topCandidates.map((candidate) => [
@@ -213,7 +215,7 @@ export class ProjectRecommendationReasoningService {
           {
             role: 'system',
             content:
-              'You are Venhawk, a B2B vendor matching assistant. Generate concise match explanations for tooltips. Return strict JSON only with shape {"reasons":[{"vendorId":123,"reason":"..."}]}. Each reason must be exactly 2 short sentences, mention both project fit and industry relevance, and avoid formulas or internal scoring math.',
+              'You are Venhawk, a B2B vendor matching assistant. Generate concise match explanations for tooltips. Return strict JSON only with shape {"reasons":[{"vendorId":123,"reason":"..."}]}. Each reason must be 2 to 3 short sentences, mention both project fit and industry relevance, and avoid formulas or internal scoring math.',
           },
           {
             role: 'user',
@@ -221,7 +223,8 @@ export class ProjectRecommendationReasoningService {
               {
                 task: 'Create reasoning for top vendor matches',
                 constraints: {
-                  exactSentencesPerReason: 2,
+                  minSentencesPerReason: this.minReasonSentences,
+                  maxSentencesPerReason: this.maxReasonSentences,
                   maxCharactersPerReason: this.maxReasonChars,
                   audience: 'business buyer',
                 },
@@ -333,8 +336,14 @@ export class ProjectRecommendationReasoningService {
         ?.map((item) => item.trim())
         .filter(Boolean) || [];
 
-    const firstTwoSentences = sentenceMatches.slice(0, 2).join(' ').trim();
-    const boundedBySentences = firstTwoSentences || normalized;
+    const boundedBySentences =
+      sentenceMatches.slice(0, this.maxReasonSentences).join(' ').trim() ||
+      normalized;
+
+    const boundedSentenceCount = this.countSentences(boundedBySentences);
+    if (boundedSentenceCount < this.minReasonSentences) {
+      return '';
+    }
 
     if (boundedBySentences.length <= this.maxReasonChars) {
       return boundedBySentences;
@@ -391,6 +400,15 @@ export class ProjectRecommendationReasoningService {
     });
 
     return createHash('sha1').update(hashInput).digest('hex');
+  }
+
+  private countSentences(value: string): number {
+    return (
+      value
+        .match(/[^.!?]+[.!?]?/g)
+        ?.map((item) => item.trim())
+        .filter(Boolean).length || 0
+    );
   }
 
   private getErrorMessage(error: unknown): string {
