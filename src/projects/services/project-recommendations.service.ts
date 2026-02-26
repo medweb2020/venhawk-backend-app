@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { createHash } from 'crypto';
 import { Project } from '../entities/project.entity';
 import { ProjectVendorMatch } from '../entities/project-vendor-match.entity';
 import { Vendor } from '../../vendors/entities/vendor.entity';
@@ -30,7 +31,6 @@ interface VendorRecommendationResult {
 @Injectable()
 export class ProjectRecommendationsService {
   private readonly ACTIVE_VENDOR_STATUSES = ['Prospect', 'Validated', 'Active'];
-  private readonly SCORING_VERSION = 'v6';
   private readonly BASE_RECOMMENDATION_LIMIT = 6;
   private readonly OVERFLOW_DISPLAY_SCORE_THRESHOLD = 70;
   private readonly MAX_RAW_SCORE = 100;
@@ -61,6 +61,7 @@ export class ProjectRecommendationsService {
     'data-archive': ['archive', 'ediscovery', 'retention', 'data migration'],
     other: [],
   };
+  private readonly SCORING_VERSION = this.buildScoringVersion();
 
   constructor(
     @InjectRepository(Project)
@@ -108,6 +109,7 @@ export class ProjectRecommendationsService {
     const scored = [...primary, ...overflow];
     const reasoningByVendorId =
       await this.projectRecommendationReasoningService.generateTopMatchReasons(
+        project.id,
         this.toProjectReasoningInput(project),
         scored.map((result) => this.toReasoningVendorInput(result)),
       );
@@ -169,6 +171,11 @@ export class ProjectRecommendationsService {
 
     if (!latestStoredMatch) {
       return this.computeAndStoreRecommendations(projectId, userId);
+    }
+
+    if (this.projectChangedSinceComputation(project, latestStoredMatch.computed_at)) {
+      await this.computeAndStoreRecommendations(projectId, userId);
+      return this.getStoredRecommendations(projectId, userId, filtersDto);
     }
 
     if (latestStoredMatch.scoring_version !== this.SCORING_VERSION) {
@@ -742,6 +749,17 @@ export class ProjectRecommendationsService {
     return 0.4;
   }
 
+  private projectChangedSinceComputation(
+    project: Project,
+    computedAt: Date | null,
+  ): boolean {
+    if (!project.updated_at || !computedAt) {
+      return false;
+    }
+
+    return new Date(project.updated_at).getTime() > new Date(computedAt).getTime();
+  }
+
   private pointsFromNormalized(normalized: number, maxPoints: number): number {
     const value = Math.max(0, Math.min(1, normalized));
     return Number((value * maxPoints).toFixed(2));
@@ -757,6 +775,26 @@ export class ProjectRecommendationsService {
   private toNumber(value: unknown): number {
     const num = Number(value);
     return Number.isFinite(num) ? num : 0;
+  }
+
+  private buildScoringVersion(): string {
+    const signature = JSON.stringify({
+      maxRawScore: this.MAX_RAW_SCORE,
+      weights: this.WEIGHTS,
+      categoryKeywords: this.CATEGORY_KEYWORDS,
+      scoringFns: {
+        capability: this.calculateCapabilityScore.toString(),
+        system: this.calculateSystemScore.toString(),
+        pricing: this.calculatePricingScore.toString(),
+        timeline: this.calculateTimelineScore.toString(),
+        proofReviews: this.calculateProofReviewsScore.toString(),
+        certifications: this.calculateCertificationsScore.toString(),
+        ilta: this.calculateIltaScore.toString(),
+        bonus: this.calculateBonusScore.toString(),
+      },
+    });
+
+    return `auto-${createHash('sha1').update(signature).digest('hex').slice(0, 12)}`;
   }
 
   private calculateTier(vendor: Vendor): string {

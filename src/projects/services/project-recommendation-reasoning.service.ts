@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectRepository } from '@nestjs/typeorm';
 import OpenAI from 'openai';
+import { createHash } from 'crypto';
+import { In, Repository } from 'typeorm';
+import { ProjectVendorReason } from '../entities/project-vendor-reason.entity';
 
 export type MatchReasonSource = 'openai' | 'fallback';
 
@@ -50,7 +54,11 @@ export class ProjectRecommendationReasoningService {
   private readonly maxReasonChars = 420;
   private readonly openAiClient: OpenAI | null;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    @InjectRepository(ProjectVendorReason)
+    private readonly projectVendorReasonRepository: Repository<ProjectVendorReason>,
+  ) {
     const apiKey = String(this.configService.get<string>('OPENAI_API_KEY') || '').trim();
     const timeoutMs = this.parseTimeoutMs(
       this.configService.get<string>('OPENAI_RECOMMENDATIONS_TIMEOUT_MS'),
@@ -77,24 +85,123 @@ export class ProjectRecommendationReasoningService {
   }
 
   async generateTopMatchReasons(
+    projectId: number,
     project: RecommendationProjectReasoningInput,
     candidates: RecommendationVendorReasoningInput[],
   ): Promise<Map<number, MatchReason>> {
-    const topCandidates = candidates.slice(0, this.topMatchReasoningLimit);
-    if (topCandidates.length === 0) {
+    if (candidates.length === 0) {
       return new Map();
     }
 
-    const fallbackReasons = this.buildFallbackReasonMap(project, topCandidates);
-    if (!this.openAiClient) {
-      return fallbackReasons;
+    const fallbackReasons = this.buildFallbackReasonMap(project, candidates);
+    const resolvedReasons = new Map<number, MatchReason>(fallbackReasons);
+
+    const topCandidates = candidates.slice(0, this.topMatchReasoningLimit);
+    if (topCandidates.length === 0) {
+      return resolvedReasons;
+    }
+
+    const contextHashByVendorId = new Map<number, string>(
+      topCandidates.map((candidate) => [
+        candidate.vendorId,
+        this.computeReasonContextHash(project, candidate),
+      ]),
+    );
+
+    const vendorIds = topCandidates.map((candidate) => candidate.vendorId);
+    const cachedReasons = await this.projectVendorReasonRepository.find({
+      where: {
+        project_id: projectId,
+        vendor_id: In(vendorIds),
+      },
+    });
+
+    const cachedByVendorId = new Map<number, ProjectVendorReason>(
+      cachedReasons.map((reason) => [reason.vendor_id, reason]),
+    );
+
+    const missingCandidates: RecommendationVendorReasoningInput[] = [];
+
+    for (const candidate of topCandidates) {
+      const cached = cachedByVendorId.get(candidate.vendorId);
+      const expectedHash = contextHashByVendorId.get(candidate.vendorId) || '';
+
+      if (!cached || cached.context_hash !== expectedHash) {
+        missingCandidates.push(candidate);
+        continue;
+      }
+
+      const cachedText = this.sanitizeReason(cached.reason_text);
+      if (!cachedText) {
+        missingCandidates.push(candidate);
+        continue;
+      }
+
+      resolvedReasons.set(candidate.vendorId, {
+        text: cachedText,
+        source: cached.reason_source === 'openai' ? 'openai' : 'fallback',
+      });
+    }
+
+    const generatedReasons = await this.generateOpenAiReasons(project, missingCandidates);
+    const now = new Date();
+    const upsertRows: Partial<ProjectVendorReason>[] = [];
+
+    for (const candidate of missingCandidates) {
+      const generatedText = generatedReasons.get(candidate.vendorId);
+      const fallbackReason = fallbackReasons.get(candidate.vendorId);
+
+      const resolvedReason = generatedText
+        ? { text: generatedText, source: 'openai' as const }
+        : fallbackReason || {
+            text: this.buildFallbackReason(project, candidate),
+            source: 'fallback' as const,
+          };
+
+      resolvedReasons.set(candidate.vendorId, resolvedReason);
+
+      upsertRows.push({
+        project_id: projectId,
+        vendor_id: candidate.vendorId,
+        reason_text: resolvedReason.text,
+        reason_source: resolvedReason.source,
+        context_hash: contextHashByVendorId.get(candidate.vendorId) || '',
+        model: this.model || null,
+        computed_at: now,
+      });
+    }
+
+    if (upsertRows.length > 0) {
+      try {
+        await this.projectVendorReasonRepository.upsert(upsertRows, [
+          'project_id',
+          'vendor_id',
+        ]);
+      } catch (error) {
+        this.logger.warn(
+          `Failed to persist recommendation reasons for project ${projectId}: ${this.getErrorMessage(
+            error,
+          )}`,
+        );
+      }
+    }
+
+    return resolvedReasons;
+  }
+
+  private async generateOpenAiReasons(
+    project: RecommendationProjectReasoningInput,
+    candidates: RecommendationVendorReasoningInput[],
+  ): Promise<Map<number, string>> {
+    if (!this.openAiClient || candidates.length === 0) {
+      return new Map();
     }
 
     try {
       const completion = await this.openAiClient.chat.completions.create({
         model: this.model,
-        temperature: 0.45,
-        max_tokens: 420,
+        temperature: 0.1,
+        max_tokens: 320,
         messages: [
           {
             role: 'system',
@@ -112,7 +219,7 @@ export class ProjectRecommendationReasoningService {
                   audience: 'business buyer',
                 },
                 project,
-                vendors: topCandidates,
+                vendors: candidates,
               },
               null,
               2,
@@ -122,28 +229,14 @@ export class ProjectRecommendationReasoningService {
       });
 
       const rawContent = completion.choices?.[0]?.message?.content || '';
-      const parsedReasons = this.parseModelReasonResponse(rawContent, topCandidates);
-
-      if (parsedReasons.size === 0) {
-        return fallbackReasons;
-      }
-
-      const mergedReasons = new Map<number, MatchReason>(fallbackReasons);
-      for (const [vendorId, reasonText] of parsedReasons.entries()) {
-        mergedReasons.set(vendorId, {
-          text: reasonText,
-          source: 'openai',
-        });
-      }
-
-      return mergedReasons;
+      return this.parseModelReasonResponse(rawContent, candidates);
     } catch (error) {
       this.logger.warn(
         `OpenAI reasoning generation failed for project "${project.projectTitle}": ${this.getErrorMessage(
           error,
         )}`,
       );
-      return fallbackReasons;
+      return new Map();
     }
   }
 
@@ -158,11 +251,11 @@ export class ProjectRecommendationReasoningService {
 
   private parseModelReasonResponse(
     rawContent: string,
-    topCandidates: RecommendationVendorReasoningInput[],
+    candidates: RecommendationVendorReasoningInput[],
   ): Map<number, string> {
     const response = this.parseJsonContent<ReasoningModelResponse>(rawContent);
     const parsed = new Map<number, string>();
-    const allowedVendorIds = new Set(topCandidates.map((candidate) => candidate.vendorId));
+    const allowedVendorIds = new Set(candidates.map((candidate) => candidate.vendorId));
 
     if (!response || !Array.isArray(response.reasons)) {
       return parsed;
@@ -228,9 +321,13 @@ export class ProjectRecommendationReasoningService {
       [];
 
     const firstTwoSentences = sentenceMatches.slice(0, 2).join(' ').trim();
-    const boundedText = firstTwoSentences || normalized;
+    const boundedBySentences = firstTwoSentences || normalized;
 
-    return boundedText;
+    if (boundedBySentences.length <= this.maxReasonChars) {
+      return boundedBySentences;
+    }
+
+    return `${boundedBySentences.slice(0, this.maxReasonChars - 3).trimEnd()}...`;
   }
 
   private buildFallbackReasonMap(
@@ -268,6 +365,19 @@ export class ProjectRecommendationReasoningService {
     const fallback = `${candidate.vendorName} fits this ${industryLabel} ${categoryLabel} project with relevant ${systemLabel} experience. ${secondSentence}`;
 
     return this.sanitizeReason(fallback);
+  }
+
+  private computeReasonContextHash(
+    project: RecommendationProjectReasoningInput,
+    candidate: RecommendationVendorReasoningInput,
+  ): string {
+    const hashInput = JSON.stringify({
+      model: this.model,
+      project,
+      candidate,
+    });
+
+    return createHash('sha1').update(hashInput).digest('hex');
   }
 
   private getErrorMessage(error: unknown): string {
