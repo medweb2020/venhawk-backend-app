@@ -12,10 +12,17 @@ import { Project } from './project.entity';
 import { Vendor } from '../../vendors/entities/vendor.entity';
 
 @Entity('project_vendor_reasons')
-@Index('uq_project_vendor_reasons_project_vendor', ['project_id', 'vendor_id'], {
-  unique: true,
-})
-@Index('idx_project_vendor_reasons_project_updated', ['project_id', 'updated_at'])
+@Index(
+  'uq_project_vendor_reasons_project_vendor',
+  ['project_id', 'vendor_id'],
+  {
+    unique: true,
+  },
+)
+@Index('idx_project_vendor_reasons_project_updated', [
+  'project_id',
+  'updated_at',
+])
 export class ProjectVendorReason {
   @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })
   id: number;

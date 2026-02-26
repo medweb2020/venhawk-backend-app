@@ -280,8 +280,23 @@ The API returns consistent error responses:
 
 ## Development Notes
 
-- TypeORM synchronize is disabled - use manual migrations
+- TypeORM synchronize is disabled
+- TypeORM migrations in `src/database/migrations/*.ts` are auto-applied on `start:prod`
+- Migration history is tracked in `typeorm_migrations`
+- Legacy SQL files are archived in `database/legacy-sql-migrations/`
+- A guard migration fails fast if base tables are missing/partial to prevent unsafe incremental runs
+- A hardening migration repairs missing recommendation columns/indexes/foreign keys idempotently
+- `npm run db:migrate:build` runs a full local build + migration cycle
 - All dates are in YYYY-MM-DD format
 - Budget values are stored as DECIMAL(15,2)
 - Soft delete is implemented via `deleted_at` column
 - User ID comes from Auth0 JWT token (sub claim)
+
+## Migration Commands
+
+- `npm run migration:show` - list pending/executed TypeORM migrations
+- `npm run migration:run` - run pending TypeORM migrations (dev/CLI path)
+- `npm run migration:revert` - revert the latest applied migration
+- `npm run migration:create --name=add-new-column` - scaffold an empty migration file
+- `npm run migration:generate --name=sync-schema` - generate migration from entity/schema diff
+- If migration guard reports missing base tables, bootstrap once from `database/schema.sql`, then rerun migrations
