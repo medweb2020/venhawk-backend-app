@@ -33,14 +33,14 @@ export class ProjectRecommendationsService {
   private readonly SCORING_VERSION = 'v6';
   private readonly BASE_RECOMMENDATION_LIMIT = 6;
   private readonly OVERFLOW_DISPLAY_SCORE_THRESHOLD = 70;
-  private readonly MAX_RAW_SCORE = 98;
+  private readonly MAX_RAW_SCORE = 100;
 
   private readonly WEIGHTS = {
-    CAPABILITY: 30,
+    CAPABILITY: 40,
     SYSTEM: 25,
-    PRICING: 15,
-    TIMELINE: 5,
-    PROOF_REVIEWS: 10,
+    PRICING: 10,
+    TIMELINE: 0,
+    PROOF_REVIEWS: 12,
     CERTIFICATIONS: 5,
     ILTA: 5,
     BONUS: {
@@ -241,7 +241,7 @@ export class ProjectRecommendationsService {
     const proofReviews = this.calculateProofReviewsScore(vendor);
     const certifications = this.calculateCertificationsScore(vendor, project);
     const ilta = this.calculateIltaScore(vendor);
-    const bonus = this.calculateBonusScore(vendor, project);
+    const bonus = this.calculateBonusScore(vendor);
 
     const baseScore =
       capability.points +
@@ -412,11 +412,13 @@ export class ProjectRecommendationsService {
 
   private calculateProofReviewsScore(vendor: Vendor): DimensionScore {
     const ratingSignals = this.extractRatingSignals(vendor);
+    const ratingMaxPoints = this.WEIGHTS.PROOF_REVIEWS * 0.8;
+    const caseStudyMaxPoints = this.WEIGHTS.PROOF_REVIEWS * 0.2;
     let ratingPoints = 0;
 
     if (ratingSignals.rating > 0) {
       const reviewGate = this.resolveReviewGate(ratingSignals.reviewCount);
-      ratingPoints = 8 * (ratingSignals.rating / 5) * reviewGate;
+      ratingPoints = ratingMaxPoints * (ratingSignals.rating / 5) * reviewGate;
     }
 
     const caseStudyCount = Math.max(
@@ -425,12 +427,16 @@ export class ProjectRecommendationsService {
     );
 
     let caseStudyPoints = 0;
-    if (caseStudyCount >= 15) caseStudyPoints = 2;
-    else if (caseStudyCount >= 8) caseStudyPoints = 1.5;
-    else if (caseStudyCount >= 3) caseStudyPoints = 1;
-    else if (caseStudyCount >= 1) caseStudyPoints = 0.5;
+    if (caseStudyCount >= 15) caseStudyPoints = caseStudyMaxPoints;
+    else if (caseStudyCount >= 8) caseStudyPoints = caseStudyMaxPoints * 0.75;
+    else if (caseStudyCount >= 3) caseStudyPoints = caseStudyMaxPoints * 0.5;
+    else if (caseStudyCount >= 1) caseStudyPoints = caseStudyMaxPoints * 0.25;
 
-    const points = Number(Math.min(10, ratingPoints + caseStudyPoints).toFixed(2));
+    const points = Number(
+      Math.min(this.WEIGHTS.PROOF_REVIEWS, ratingPoints + caseStudyPoints).toFixed(
+        2,
+      ),
+    );
     return { points, maxPoints: this.WEIGHTS.PROOF_REVIEWS };
   }
 
@@ -473,39 +479,14 @@ export class ProjectRecommendationsService {
     };
   }
 
-  private calculateBonusScore(vendor: Vendor, project: Project): DimensionScore {
-    const projectText = this.toSearchText(
-      project.system_name,
-      project.project_objective,
-      project.business_requirements,
-      project.technical_requirements,
-    );
-
-    const microsoftRelevant =
-      this.hasAnyKeyword(projectText, [
-        'azure',
-        'm365',
-        'microsoft 365',
-        'office 365',
-        'entra',
-        'active directory',
-        'sharepoint',
-        'teams',
-        'dynamics',
-      ]);
-    const serviceNowRelevant = this.hasAnyKeyword(projectText, ['servicenow']);
-    const workdayRelevant = this.hasAnyKeyword(projectText, ['workday']);
-
-    const microsoftPoints =
-      microsoftRelevant && vendor.is_microsoft_partner
-        ? this.WEIGHTS.BONUS.MICROSOFT
-        : 0;
-    const serviceNowPoints =
-      serviceNowRelevant && vendor.is_servicenow_partner
-        ? this.WEIGHTS.BONUS.SERVICENOW
-        : 0;
-    const workdayPoints =
-      workdayRelevant && vendor.is_workday_partner ? this.WEIGHTS.BONUS.WORKDAY : 0;
+  private calculateBonusScore(vendor: Vendor): DimensionScore {
+    const microsoftPoints = vendor.is_microsoft_partner
+      ? this.WEIGHTS.BONUS.MICROSOFT
+      : 0;
+    const serviceNowPoints = vendor.is_servicenow_partner
+      ? this.WEIGHTS.BONUS.SERVICENOW
+      : 0;
+    const workdayPoints = vendor.is_workday_partner ? this.WEIGHTS.BONUS.WORKDAY : 0;
 
     const totalPoints = microsoftPoints + serviceNowPoints + workdayPoints;
 
@@ -515,9 +496,9 @@ export class ProjectRecommendationsService {
         this.WEIGHTS.BONUS.MICROSOFT +
         this.WEIGHTS.BONUS.SERVICENOW +
         this.WEIGHTS.BONUS.WORKDAY,
-      microsoftRelevant,
-      serviceNowRelevant,
-      workdayRelevant,
+      microsoftRelevant: true,
+      serviceNowRelevant: true,
+      workdayRelevant: true,
       microsoftPoints,
       serviceNowPoints,
       workdayPoints,
@@ -771,10 +752,6 @@ export class ProjectRecommendationsService {
       .map((value) => String(value || '').trim().toLowerCase())
       .filter(Boolean)
       .join(' ');
-  }
-
-  private hasAnyKeyword(haystack: string, keywords: string[]): boolean {
-    return keywords.some((keyword) => haystack.includes(keyword.toLowerCase()));
   }
 
   private toNumber(value: unknown): number {

@@ -172,13 +172,18 @@ export class VendorsService {
 
   // Matching weights as per requirement
   private readonly WEIGHTS = {
-    CAPABILITY_MATCH: 0.3, // 30% - Project Category + Work Type
+    CAPABILITY_MATCH: 0.4, // 40% - Project Category
     SYSTEM_MATCH: 0.25, // 25% - Primary Application / extracted systems
-    PRICING_FIT: 0.15, // 15% - Budget vs vendor pricing
-    TIMELINE_AVAILABILITY: 0.1, // 10% - Timeline vs capacity
-    PROOF_REVIEWS: 0.1, // 10% - Reviews + case studies
+    PRICING_FIT: 0.1, // 10% - Budget vs vendor pricing
+    TIMELINE_AVAILABILITY: 0, // 0% - Timeline & availability
+    PROOF_REVIEWS: 0.12, // 12% - Reviews + case studies
     CERTIFICATIONS: 0.05, // 5% - Certs required by project
     ILTA_PRESENCE: 0.05, // 5% - Yes / No field
+    BONUS: {
+      MICROSOFT: 0.01, // +1%
+      SERVICENOW: 0.01, // +1%
+      WORKDAY: 0.01, // +1%
+    },
   };
 
   constructor(
@@ -506,7 +511,7 @@ export class VendorsService {
   ): number {
     let totalScore = 0;
 
-    // 1. Capability Match (30%) - Project Category + Work Type
+    // 1. Capability Match (40%) - Project Category + Work Type
     totalScore +=
       this.calculateCapabilityMatch(vendor, criteria) *
       this.WEIGHTS.CAPABILITY_MATCH;
@@ -515,16 +520,16 @@ export class VendorsService {
     totalScore +=
       this.calculateSystemMatch(vendor, criteria) * this.WEIGHTS.SYSTEM_MATCH;
 
-    // 3. Pricing Fit (15%) - Budget vs vendor pricing
+    // 3. Pricing Fit (10%) - Budget vs vendor pricing
     totalScore +=
       this.calculatePricingFit(vendor, criteria) * this.WEIGHTS.PRICING_FIT;
 
-    // 4. Timeline & Availability Fit (10%)
+    // 4. Timeline & Availability Fit (0%)
     totalScore +=
       this.calculateTimelineAvailabilityFit(vendor, criteria) *
       this.WEIGHTS.TIMELINE_AVAILABILITY;
 
-    // 5. Proof & Reviews (10%)
+    // 5. Proof & Reviews (12%)
     totalScore +=
       this.calculateProofReviews(vendor) * this.WEIGHTS.PROOF_REVIEWS;
 
@@ -536,7 +541,10 @@ export class VendorsService {
     totalScore +=
       this.calculateILTAPresence(vendor) * this.WEIGHTS.ILTA_PRESENCE;
 
-    return Math.round(totalScore * 100); // Return as percentage (0-100)
+    // 8. Partner bonus (+1% each)
+    totalScore += this.calculatePartnerBonus(vendor);
+
+    return Math.max(0, Math.min(100, Math.round(totalScore * 100)));
   }
 
   private calculateCapabilityMatch(
@@ -741,16 +749,25 @@ export class VendorsService {
   }
 
   private calculateILTAPresence(vendor: Vendor): number {
-    // Check if vendor has legal focus (proxy for ILTA presence)
-    if (vendor.legal_focus_level === 'Legal-only') {
-      return 1.0;
-    } else if (vendor.legal_focus_level === 'Strong') {
-      return 0.7;
-    } else if (vendor.legal_focus_level === 'Some') {
-      return 0.4;
+    return vendor.ilta_present ? 1 : 0;
+  }
+
+  private calculatePartnerBonus(vendor: Vendor): number {
+    let score = 0;
+
+    if (vendor.is_microsoft_partner) {
+      score += this.WEIGHTS.BONUS.MICROSOFT;
     }
 
-    return 0;
+    if (vendor.is_servicenow_partner) {
+      score += this.WEIGHTS.BONUS.SERVICENOW;
+    }
+
+    if (vendor.is_workday_partner) {
+      score += this.WEIGHTS.BONUS.WORKDAY;
+    }
+
+    return score;
   }
 
   private transformToResponseDto(
