@@ -8,6 +8,11 @@ import { ProjectCategory } from './entities/project-category.entity';
 import { ProjectFile } from '../files/entities/project-file.entity';
 import { UsersModule } from '../users/users.module';
 import { VendorsModule } from '../vendors/vendors.module';
+import { Vendor } from '../vendors/entities/vendor.entity';
+import { ProjectVendorMatch } from './entities/project-vendor-match.entity';
+import { ProjectVendorReason } from './entities/project-vendor-reason.entity';
+import { ProjectRecommendationsService } from './services/project-recommendations.service';
+import { ProjectRecommendationReasoningService } from './services/project-recommendation-reasoning.service';
 
 @Module({
   imports: [
@@ -16,12 +21,19 @@ import { VendorsModule } from '../vendors/vendors.module';
       ClientIndustry,
       ProjectCategory,
       ProjectFile,
+      Vendor,
+      ProjectVendorMatch,
+      ProjectVendorReason,
     ]),
     UsersModule,
     VendorsModule,
   ],
   controllers: [ProjectsController],
-  providers: [ProjectsService],
+  providers: [
+    ProjectsService,
+    ProjectRecommendationsService,
+    ProjectRecommendationReasoningService,
+  ],
   exports: [ProjectsService],
 })
 export class ProjectsModule {}

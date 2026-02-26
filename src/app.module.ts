@@ -14,6 +14,8 @@ import { ClientIndustry } from './projects/entities/client-industry.entity';
 import { ProjectCategory } from './projects/entities/project-category.entity';
 import { ProjectFile } from './files/entities/project-file.entity';
 import { Vendor } from './vendors/entities/vendor.entity';
+import { ProjectVendorMatch } from './projects/entities/project-vendor-match.entity';
+import { ProjectVendorReason } from './projects/entities/project-vendor-reason.entity';
 
 @Module({
   imports: [
@@ -37,6 +39,8 @@ import { Vendor } from './vendors/entities/vendor.entity';
           ClientIndustry,
           ProjectCategory,
           ProjectFile,
+          ProjectVendorMatch,
+          ProjectVendorReason,
           Vendor,
         ],
         synchronize: false, // Use manual migrations

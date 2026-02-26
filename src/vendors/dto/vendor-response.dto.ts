@@ -1,5 +1,6 @@
 export class VendorResponseDto {
   id: number;
+  vendorId: string;
   name: string;
   logo: string;
   logoUrl: string;
@@ -11,4 +12,10 @@ export class VendorResponseDto {
   specialty: string;
   startFrom: string;
   matchingScore: number;
+  rawScore?: number;
+  maxScore?: number;
+  scoringVersion?: string;
+  scoreBreakdown?: Record<string, unknown>;
+  matchingReason?: string;
+  matchingReasonSource?: 'openai' | 'fallback';
 }

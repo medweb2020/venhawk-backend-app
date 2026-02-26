@@ -170,6 +170,18 @@ export class Vendor {
   @Column({ type: 'enum', enum: ['Y', 'N', 'Unk'], default: 'Unk' })
   has_iso27001: string;
 
+  @Column({ type: 'boolean', default: false })
+  ilta_present: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  is_microsoft_partner: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  is_servicenow_partner: boolean;
+
+  @Column({ type: 'boolean', default: false })
+  is_workday_partner: boolean;
+
   @Column({ type: 'varchar', length: 500, nullable: true })
   security_overview_link: string;
 

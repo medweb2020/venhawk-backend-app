@@ -64,6 +64,11 @@ DB_PORT=3306
 DB_USERNAME=root
 DB_PASSWORD=your_mysql_password
 DB_DATABASE=venhawk
+
+# OpenAI (optional: tooltip reasoning for top 3 project matches)
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_RECOMMENDATIONS_MODEL=gpt-4.1-mini
+OPENAI_RECOMMENDATIONS_TIMEOUT_MS=10000
 ```
 
 **Important**: Update `AUTH0_AUDIENCE` with your Auth0 API identifier.
