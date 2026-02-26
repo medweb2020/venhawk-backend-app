@@ -309,7 +309,34 @@ CREATE TABLE vendors (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
--- TABLE 2: VENDOR_RATINGS (Optional - for multiple ratings per source)
+-- TABLE 2: PROJECT_VENDOR_MATCHES (Persisted recommendation snapshots)
+-- ============================================================================
+
+DROP TABLE IF EXISTS project_vendor_matches;
+
+CREATE TABLE project_vendor_matches (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    project_id BIGINT UNSIGNED NOT NULL,
+    vendor_id INT NOT NULL,
+    rank_position INT NOT NULL,
+    raw_score DECIMAL(6,2) NOT NULL,
+    display_score INT NOT NULL,
+    score_breakdown_json JSON,
+    scoring_version VARCHAR(32) NOT NULL DEFAULT 'v1',
+    computed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    UNIQUE KEY uq_project_vendor_matches_project_vendor (project_id, vendor_id),
+    INDEX idx_project_vendor_matches_project_rank (project_id, rank_position),
+    INDEX idx_project_vendor_matches_computed_at (computed_at),
+
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================================
+-- TABLE 3: VENDOR_RATINGS (Optional - for multiple ratings per source)
 -- ============================================================================
 
 DROP TABLE IF EXISTS vendor_ratings;
@@ -329,7 +356,7 @@ CREATE TABLE vendor_ratings (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================================
--- TABLE 3: VENDOR_TECH_STACK (Optional - for detailed platform tracking)
+-- TABLE 4: VENDOR_TECH_STACK (Optional - for detailed platform tracking)
 -- ============================================================================
 
 DROP TABLE IF EXISTS vendor_tech_stack;

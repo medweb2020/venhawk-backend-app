@@ -69,3 +69,23 @@ SET @sql := (
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
+
+CREATE TABLE IF NOT EXISTS project_vendor_matches (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  project_id BIGINT UNSIGNED NOT NULL,
+  vendor_id INT NOT NULL,
+  rank_position INT NOT NULL,
+  raw_score DECIMAL(6,2) NOT NULL,
+  display_score INT NOT NULL,
+  score_breakdown_json JSON DEFAULT NULL,
+  scoring_version VARCHAR(32) NOT NULL DEFAULT 'v1',
+  computed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_project_vendor_matches_project_vendor (project_id, vendor_id),
+  KEY idx_project_vendor_matches_project_rank (project_id, rank_position),
+  KEY idx_project_vendor_matches_computed_at (computed_at),
+  CONSTRAINT fk_project_vendor_matches_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  CONSTRAINT fk_project_vendor_matches_vendor FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

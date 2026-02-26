@@ -9,6 +9,7 @@ import { ProjectFile } from '../files/entities/project-file.entity';
 import { UsersModule } from '../users/users.module';
 import { VendorsModule } from '../vendors/vendors.module';
 import { Vendor } from '../vendors/entities/vendor.entity';
+import { ProjectVendorMatch } from './entities/project-vendor-match.entity';
 import { ProjectRecommendationsService } from './services/project-recommendations.service';
 import { ProjectRecommendationReasoningService } from './services/project-recommendation-reasoning.service';
 
@@ -20,6 +21,7 @@ import { ProjectRecommendationReasoningService } from './services/project-recomm
       ProjectCategory,
       ProjectFile,
       Vendor,
+      ProjectVendorMatch,
     ]),
     UsersModule,
     VendorsModule,

@@ -148,9 +148,9 @@ export class ProjectsService {
       );
     }
 
-    // 10. Compute recommendations (returned in create response for backward compatibility)
+    // 10. Compute and persist recommendations (kept in create response for backward compatibility)
     const recommendations =
-      await this.projectRecommendationsService.computeRecommendations(
+      await this.projectRecommendationsService.computeAndStoreRecommendations(
         savedProject.id,
         user.id,
       );
@@ -174,7 +174,7 @@ export class ProjectsService {
     auth0UserId: string,
   ): Promise<ProjectRecommendationsResponseDto> {
     const user = await this.getUserOrThrow(auth0UserId);
-    return this.projectRecommendationsService.computeRecommendations(
+    return this.projectRecommendationsService.computeAndStoreRecommendations(
       projectId,
       user.id,
     );
@@ -186,7 +186,7 @@ export class ProjectsService {
     filtersDto?: VendorListingFiltersDto,
   ): Promise<ProjectRecommendationsResponseDto> {
     const user = await this.getUserOrThrow(auth0UserId);
-    return this.projectRecommendationsService.computeRecommendations(
+    return this.projectRecommendationsService.getStoredRecommendations(
       projectId,
       user.id,
       filtersDto,

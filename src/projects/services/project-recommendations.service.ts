@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Project } from '../entities/project.entity';
+import { ProjectVendorMatch } from '../entities/project-vendor-match.entity';
 import { Vendor } from '../../vendors/entities/vendor.entity';
 import { VendorResponseDto } from '../../vendors/dto/vendor-response.dto';
 import { ProjectRecommendationsResponseDto } from '../dto/project-recommendations-response.dto';
@@ -29,6 +30,7 @@ interface VendorRecommendationResult {
 @Injectable()
 export class ProjectRecommendationsService {
   private readonly ACTIVE_VENDOR_STATUSES = ['Prospect', 'Validated', 'Active'];
+  private readonly SCORING_VERSION = 'v6';
   private readonly BASE_RECOMMENDATION_LIMIT = 6;
   private readonly OVERFLOW_DISPLAY_SCORE_THRESHOLD = 70;
   private readonly MAX_RAW_SCORE = 100;
@@ -65,25 +67,23 @@ export class ProjectRecommendationsService {
     private readonly projectsRepository: Repository<Project>,
     @InjectRepository(Vendor)
     private readonly vendorsRepository: Repository<Vendor>,
+    @InjectRepository(ProjectVendorMatch)
+    private readonly projectVendorMatchesRepository: Repository<ProjectVendorMatch>,
     private readonly vendorsService: VendorsService,
     private readonly projectRecommendationReasoningService: ProjectRecommendationReasoningService,
   ) {}
 
-  async computeRecommendations(
+  async computeAndStoreRecommendations(
     projectId: number,
     userId: number,
-    filtersDto?: VendorListingFiltersDto,
   ): Promise<ProjectRecommendationsResponseDto> {
     const project = await this.getProjectForUser(projectId, userId);
-    const queryBuilder = this.vendorsRepository
+    const vendors = await this.vendorsRepository
       .createQueryBuilder('vendor')
       .where('vendor.status IN (:...statuses)', {
         statuses: this.ACTIVE_VENDOR_STATUSES,
-      });
-
-    this.vendorsService.applyListingFiltersToQueryBuilder(queryBuilder, filtersDto);
-
-    const vendors = await queryBuilder.getMany();
+      })
+      .getMany();
 
     const ranked = vendors
       .map((vendor) => this.scoreVendor(vendor, project))
@@ -113,9 +113,30 @@ export class ProjectRecommendationsService {
       );
 
     const computedAt = new Date();
+    const records = scored.map((result, index) =>
+      this.projectVendorMatchesRepository.create(
+        this.toStoredRecommendationRecord(
+          project.id,
+          result,
+          index + 1,
+          computedAt,
+          reasoningByVendorId.get(result.vendor.id) || null,
+        ),
+      ),
+    );
+
+    await this.projectVendorMatchesRepository.manager.transaction(
+      async (entityManager) => {
+        await entityManager.delete(ProjectVendorMatch, { project_id: project.id });
+        if (records.length > 0) {
+          await entityManager.save(ProjectVendorMatch, records);
+        }
+      },
+    );
 
     return {
       projectId: project.id,
+      scoringVersion: this.SCORING_VERSION,
       computedAt,
       totalRecommended: scored.length,
       recommendedVendors: scored.map((result) =>
@@ -130,6 +151,66 @@ export class ProjectRecommendationsService {
           reasoningByVendorId.get(result.vendor.id) || null,
         ),
       ),
+    };
+  }
+
+  async getStoredRecommendations(
+    projectId: number,
+    userId: number,
+    filtersDto?: VendorListingFiltersDto,
+  ): Promise<ProjectRecommendationsResponseDto> {
+    const project = await this.getProjectForUser(projectId, userId);
+
+    const latestStoredMatch = await this.projectVendorMatchesRepository
+      .createQueryBuilder('match')
+      .where('match.project_id = :projectId', { projectId })
+      .orderBy('match.rank_position', 'ASC')
+      .getOne();
+
+    if (!latestStoredMatch) {
+      return this.computeAndStoreRecommendations(projectId, userId);
+    }
+
+    if (latestStoredMatch.scoring_version !== this.SCORING_VERSION) {
+      await this.computeAndStoreRecommendations(projectId, userId);
+      return this.getStoredRecommendations(projectId, userId, filtersDto);
+    }
+
+    const queryBuilder = this.projectVendorMatchesRepository
+      .createQueryBuilder('match')
+      .leftJoinAndSelect('match.vendor', 'vendor')
+      .where('match.project_id = :projectId', { projectId })
+      .orderBy('match.rank_position', 'ASC');
+
+    this.vendorsService.applyListingFiltersToQueryBuilder(queryBuilder, filtersDto);
+
+    const matches = await queryBuilder.getMany();
+
+    const computedAt = latestStoredMatch.computed_at;
+    const scoringVersion =
+      latestStoredMatch.scoring_version || this.SCORING_VERSION;
+
+    return {
+      projectId: project.id,
+      scoringVersion,
+      computedAt,
+      totalRecommended: matches.length,
+      recommendedVendors: matches.map((match) => {
+        const scoreBreakdown = (match.score_breakdown_json || {}) as Record<
+          string,
+          unknown
+        >;
+        const matchReason = this.extractMatchReason(scoreBreakdown);
+
+        return this.toVendorResponseDto(
+          match.vendor,
+          match.display_score,
+          Number(match.raw_score),
+          scoreBreakdown,
+          matchReason,
+          scoringVersion,
+        );
+      }),
     };
   }
 
@@ -469,6 +550,25 @@ export class ProjectRecommendationsService {
     };
   }
 
+  private toStoredRecommendationRecord(
+    projectId: number,
+    result: VendorRecommendationResult,
+    rankPosition: number,
+    computedAt: Date,
+    matchReason: MatchReason | null,
+  ): Partial<ProjectVendorMatch> {
+    return {
+      project_id: projectId,
+      vendor_id: result.vendor.id,
+      rank_position: rankPosition,
+      raw_score: Number(result.rawScore.toFixed(2)),
+      display_score: result.displayScore,
+      score_breakdown_json: this.attachReasonToBreakdown(result.breakdown, matchReason),
+      scoring_version: this.SCORING_VERSION,
+      computed_at: computedAt,
+    };
+  }
+
   private attachReasonToBreakdown(
     scoreBreakdown: Record<string, unknown>,
     matchReason: MatchReason | null,
@@ -481,6 +581,23 @@ export class ProjectRecommendationsService {
       ...scoreBreakdown,
       matchingReason: matchReason.text,
       matchingReasonSource: matchReason.source,
+    };
+  }
+
+  private extractMatchReason(
+    scoreBreakdown: Record<string, unknown>,
+  ): MatchReason | null {
+    const reasonRaw = scoreBreakdown['matchingReason'];
+    if (typeof reasonRaw !== 'string' || !reasonRaw.trim()) {
+      return null;
+    }
+
+    const sourceRaw = scoreBreakdown['matchingReasonSource'];
+    const source = sourceRaw === 'openai' ? 'openai' : 'fallback';
+
+    return {
+      text: reasonRaw.trim(),
+      source,
     };
   }
 
@@ -547,6 +664,7 @@ export class ProjectRecommendationsService {
     rawScore: number,
     scoreBreakdown: Record<string, unknown>,
     matchReason: MatchReason | null = null,
+    scoringVersion = this.SCORING_VERSION,
   ): VendorResponseDto {
     const tier = vendor.listing_tier || this.calculateTier(vendor);
     const logo = this.generateLogo(vendor.brand_name);
@@ -567,6 +685,7 @@ export class ProjectRecommendationsService {
       matchingScore,
       rawScore: Number(rawScore.toFixed(2)),
       maxScore: this.MAX_RAW_SCORE,
+      scoringVersion,
       scoreBreakdown,
     };
 
