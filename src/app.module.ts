@@ -8,11 +8,14 @@ import { UsersModule } from './users/users.module';
 import { ProjectsModule } from './projects/projects.module';
 import { FilesModule } from './files/files.module';
 import { VendorsModule } from './vendors/vendors.module';
-import {
-  TYPEORM_ENTITIES,
-  TYPEORM_MIGRATIONS,
-  TYPEORM_MIGRATIONS_TABLE_NAME,
-} from './database/typeorm.constants';
+import { User } from './users/entities/user.entity';
+import { Project } from './projects/entities/project.entity';
+import { ClientIndustry } from './projects/entities/client-industry.entity';
+import { ProjectCategory } from './projects/entities/project-category.entity';
+import { ProjectFile } from './files/entities/project-file.entity';
+import { Vendor } from './vendors/entities/vendor.entity';
+import { ProjectVendorMatch } from './projects/entities/project-vendor-match.entity';
+import { ProjectVendorReason } from './projects/entities/project-vendor-reason.entity';
 
 @Module({
   imports: [
@@ -30,11 +33,17 @@ import {
         username: configService.get('DB_USERNAME'),
         password: configService.get('DB_PASSWORD'),
         database: configService.get('DB_DATABASE'),
-        entities: TYPEORM_ENTITIES,
-        migrations: TYPEORM_MIGRATIONS,
-        migrationsTableName: TYPEORM_MIGRATIONS_TABLE_NAME,
-        migrationsRun: false,
-        synchronize: false, // Use TypeORM migrations
+        entities: [
+          User,
+          Project,
+          ClientIndustry,
+          ProjectCategory,
+          ProjectFile,
+          ProjectVendorMatch,
+          ProjectVendorReason,
+          Vendor,
+        ],
+        synchronize: false, // Use manual migrations
       }),
       inject: [ConfigService],
     }),

@@ -12,17 +12,10 @@ import { Project } from './project.entity';
 import { Vendor } from '../../vendors/entities/vendor.entity';
 
 @Entity('project_vendor_matches')
-@Index(
-  'uq_project_vendor_matches_project_vendor',
-  ['project_id', 'vendor_id'],
-  {
-    unique: true,
-  },
-)
-@Index('idx_project_vendor_matches_project_rank', [
-  'project_id',
-  'rank_position',
-])
+@Index('uq_project_vendor_matches_project_vendor', ['project_id', 'vendor_id'], {
+  unique: true,
+})
+@Index('idx_project_vendor_matches_project_rank', ['project_id', 'rank_position'])
 @Index('idx_project_vendor_matches_computed_at', ['computed_at'])
 export class ProjectVendorMatch {
   @PrimaryGeneratedColumn({ type: 'bigint', unsigned: true })

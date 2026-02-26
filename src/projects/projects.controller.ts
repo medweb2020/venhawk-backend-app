@@ -43,10 +43,6 @@ export class ProjectsController {
     @Request() req,
   ): Promise<ProjectRecommendationsResponseDto> {
     const auth0UserId = req.user.userId;
-    return this.projectsService.getRecommendations(
-      projectId,
-      auth0UserId,
-      filters,
-    );
+    return this.projectsService.getRecommendations(projectId, auth0UserId, filters);
   }
 }
