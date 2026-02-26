@@ -14,7 +14,6 @@ export class VendorResponseDto {
   matchingScore: number;
   rawScore?: number;
   maxScore?: number;
-  scoringVersion?: string;
   scoreBreakdown?: Record<string, unknown>;
   matchingReason?: string;
   matchingReasonSource?: 'openai' | 'fallback';
