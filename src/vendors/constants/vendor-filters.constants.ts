@@ -50,13 +50,6 @@ export const VENDOR_FILTER_GROUPS: VendorFilterGroup[] = [
     label: 'Relevant Industry Experience',
     options: [
       { value: 'legal', label: 'Legal' },
-      { value: 'financial-services', label: 'Financial Services' },
-      { value: 'healthcare', label: 'Healthcare' },
-      { value: 'government', label: 'Government' },
-      { value: 'enterprise-corporate', label: 'Enterprise / Corporate' },
-      { value: 'technology-saas', label: 'Technology / SaaS' },
-      { value: 'insurance', label: 'Insurance' },
-      { value: 'other', label: 'Other' },
     ],
   },
   {

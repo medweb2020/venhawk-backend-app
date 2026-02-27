@@ -54,8 +54,8 @@ export class ProjectRecommendationReasoningService {
   private readonly model: string;
   private readonly topMatchReasoningLimit = 3;
   private readonly minReasonSentences = 2;
-  private readonly maxReasonSentences = 3;
-  private readonly maxReasonChars = 420;
+  private readonly maxReasonSentences = 2;
+  private readonly maxReasonChars = 260;
   private readonly openAiClient: OpenAI | null;
 
   constructor(
@@ -210,12 +210,12 @@ export class ProjectRecommendationReasoningService {
       const completion = await this.openAiClient.chat.completions.create({
         model: this.model,
         temperature: 0.1,
-        max_tokens: 320,
+        max_tokens: 220,
         messages: [
           {
             role: 'system',
             content:
-              'You are Venhawk, a B2B vendor matching assistant. Generate concise match explanations for tooltips. Return strict JSON only with shape {"reasons":[{"vendorId":123,"reason":"..."}]}. Each reason must be 2 to 3 short sentences, mention both project fit and industry relevance, and avoid formulas or internal scoring math.',
+              'You are Venhawk, a B2B vendor matching assistant. Generate focused match explanations for tooltips. Return strict JSON only with shape {"reasons":[{"vendorId":123,"reason":"..."}]}. Each reason must be exactly 2 short sentences, mention concrete system/category fit, reference legal industry relevance, and avoid marketing fluff, repetition, formulas, or internal scoring math.',
           },
           {
             role: 'user',
@@ -226,6 +226,7 @@ export class ProjectRecommendationReasoningService {
                   minSentencesPerReason: this.minReasonSentences,
                   maxSentencesPerReason: this.maxReasonSentences,
                   maxCharactersPerReason: this.maxReasonChars,
+                  style: 'specific, concise, outcome-focused',
                   audience: 'business buyer',
                 },
                 project,
@@ -395,6 +396,11 @@ export class ProjectRecommendationReasoningService {
   ): string {
     const hashInput = JSON.stringify({
       model: this.model,
+      reasonPolicy: {
+        minSentences: this.minReasonSentences,
+        maxSentences: this.maxReasonSentences,
+        maxChars: this.maxReasonChars,
+      },
       project,
       candidate,
     });

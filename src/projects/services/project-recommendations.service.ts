@@ -15,6 +15,14 @@ import {
   RecommendationProjectReasoningInput,
   RecommendationVendorReasoningInput,
 } from './project-recommendation-reasoning.service';
+import {
+  getAllowedSystemsForCategory,
+  LEGAL_CLIENT_INDUSTRY_VALUE,
+  PROJECT_CATEGORY_ELIGIBILITY_KEYWORDS,
+  PROJECT_CATEGORY_SYSTEM_OPTIONS,
+  resolveCanonicalSystemName,
+  textSupportsCanonicalSystem,
+} from '../constants/project-matching.constants';
 
 interface DimensionScore {
   points: number;
@@ -66,12 +74,7 @@ export class ProjectRecommendationsService {
       'microsoft 365',
       'm365',
     ],
-    'app-upgrades': ['upgrade', 'integration', 'api', 'legacy modernization'],
     'app-bug-fixes': ['upgrade', 'integration', 'api', 'legacy modernization'],
-    collaboration: ['collaboration', 'sharepoint', 'teams', 'microsoft 365'],
-    security: ['security', 'identity', 'entra', 'compliance', 'iam'],
-    'data-archive': ['archive', 'ediscovery', 'retention', 'data migration'],
-    other: [],
   };
   private readonly SCORING_VERSION = this.buildScoringVersion();
 
@@ -98,7 +101,11 @@ export class ProjectRecommendationsService {
       })
       .getMany();
 
-    const ranked = vendors
+    const eligibleVendors = vendors.filter((vendor) =>
+      this.isVendorEligibleForProject(vendor, project),
+    );
+
+    const ranked = eligibleVendors
       .map((vendor) => this.scoreVendor(vendor, project))
       .filter((result) => result.rawScore > 0)
       .sort((a, b) => {
@@ -262,6 +269,74 @@ export class ProjectRecommendationsService {
     return project;
   }
 
+  private isVendorEligibleForProject(vendor: Vendor, project: Project): boolean {
+    const projectIndustry = this.resolveProjectIndustryValue(project);
+    if (projectIndustry !== LEGAL_CLIENT_INDUSTRY_VALUE) {
+      return false;
+    }
+
+    if (String(vendor.legal_focus_level || '').trim().toLowerCase() === 'none') {
+      return false;
+    }
+
+    const projectCategory = this.resolveProjectCategoryValue(project);
+    const categoryKeywords =
+      PROJECT_CATEGORY_ELIGIBILITY_KEYWORDS[projectCategory] || [];
+    if (categoryKeywords.length === 0) {
+      return false;
+    }
+
+    const canonicalProjectSystem = this.resolveProjectCanonicalSystem(
+      project,
+      projectCategory,
+    );
+    if (!canonicalProjectSystem) {
+      return false;
+    }
+
+    const vendorEligibilityText = this.toSearchText(
+      vendor.vendor_type,
+      vendor.listing_specialty,
+      vendor.listing_description,
+      vendor.service_domains,
+      vendor.platforms_experience,
+      vendor.legal_tech_stack,
+    );
+
+    const categoryMatched = categoryKeywords.some((keyword) =>
+      vendorEligibilityText.includes(keyword),
+    );
+    if (!categoryMatched) {
+      return false;
+    }
+
+    return textSupportsCanonicalSystem(
+      vendorEligibilityText,
+      canonicalProjectSystem,
+    );
+  }
+
+  private resolveProjectIndustryValue(project: Project): string {
+    return String(project.clientIndustry?.value || '').trim().toLowerCase();
+  }
+
+  private resolveProjectCategoryValue(project: Project): string {
+    return String(project.projectCategory?.value || '').trim().toLowerCase();
+  }
+
+  private resolveProjectCanonicalSystem(
+    project: Project,
+    projectCategoryValue: string,
+  ): string | null {
+    const allowedSystems = getAllowedSystemsForCategory(projectCategoryValue);
+    const canonicalSystem = resolveCanonicalSystemName(
+      project.system_name,
+      allowedSystems,
+    );
+
+    return canonicalSystem || null;
+  }
+
   private scoreVendor(
     vendor: Vendor,
     project: Project,
@@ -352,48 +427,27 @@ export class ProjectRecommendationsService {
     vendor: Vendor,
     project: Project,
   ): DimensionScore {
-    const systemName = (project.system_name || '').trim().toLowerCase();
-    if (!systemName) {
-      return {
-        points: this.WEIGHTS.SYSTEM * 0.4,
-        maxPoints: this.WEIGHTS.SYSTEM,
-      };
+    const projectCategoryValue = this.resolveProjectCategoryValue(project);
+    const canonicalProjectSystem = this.resolveProjectCanonicalSystem(
+      project,
+      projectCategoryValue,
+    );
+
+    if (!canonicalProjectSystem) {
+      return { points: 0, maxPoints: this.WEIGHTS.SYSTEM };
     }
 
     const vendorText = this.toSearchText(
       vendor.legal_tech_stack,
       vendor.platforms_experience,
       vendor.service_domains,
+      vendor.listing_specialty,
+      vendor.listing_description,
     );
 
-    if (!vendorText) {
-      return {
-        points: this.WEIGHTS.SYSTEM * 0.3,
-        maxPoints: this.WEIGHTS.SYSTEM,
-      };
-    }
-
-    if (vendorText.includes(systemName)) {
-      return { points: this.WEIGHTS.SYSTEM, maxPoints: this.WEIGHTS.SYSTEM };
-    }
-
-    const tokens = systemName
-      .split(/[\s,;/()+-]+/g)
-      .map((token) => token.trim())
-      .filter((token) => token.length > 2);
-
-    if (tokens.length === 0) {
-      return {
-        points: this.WEIGHTS.SYSTEM * 0.2,
-        maxPoints: this.WEIGHTS.SYSTEM,
-      };
-    }
-
-    const matchedTokens = tokens.filter((token) =>
-      vendorText.includes(token),
-    ).length;
-    const normalized = matchedTokens / tokens.length;
-    const points = this.pointsFromNormalized(normalized, this.WEIGHTS.SYSTEM);
+    const points = textSupportsCanonicalSystem(vendorText, canonicalProjectSystem)
+      ? this.WEIGHTS.SYSTEM
+      : 0;
 
     return { points, maxPoints: this.WEIGHTS.SYSTEM };
   }
@@ -843,11 +897,18 @@ export class ProjectRecommendationsService {
       maxRawScore: this.MAX_RAW_SCORE,
       weights: this.WEIGHTS,
       categoryKeywords: this.CATEGORY_KEYWORDS,
+      eligibilityPolicy: {
+        legalClientIndustryOnly: LEGAL_CLIENT_INDUSTRY_VALUE,
+        strictCategoryGate: true,
+        strictSystemGate: true,
+        categorySystemOptions: PROJECT_CATEGORY_SYSTEM_OPTIONS,
+        categoryEligibilityKeywords: PROJECT_CATEGORY_ELIGIBILITY_KEYWORDS,
+      },
       reasoningPolicy: {
         topMatchesOnly: true,
         topMatchLimit: 3,
         minSentences: 2,
-        maxSentences: 3,
+        maxSentences: 2,
       },
       scoringFns: {
         capability: this.calculateCapabilityScore.toString(),

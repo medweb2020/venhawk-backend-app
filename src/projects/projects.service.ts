@@ -15,6 +15,11 @@ import { ProjectRecommendationsResponseDto } from './dto/project-recommendations
 import { UsersService } from '../users/users.service';
 import { ProjectRecommendationsService } from './services/project-recommendations.service';
 import { VendorListingFiltersDto } from '../vendors/dto/vendor-listing-filters.dto';
+import {
+  getAllowedSystemsForCategory,
+  LEGAL_CLIENT_INDUSTRY_VALUE,
+  resolveCanonicalSystemName,
+} from './constants/project-matching.constants';
 
 @Injectable()
 export class ProjectsService {
@@ -38,6 +43,15 @@ export class ProjectsService {
     // 1. Lookup user by Auth0 ID
     const user = await this.getUserOrThrow(auth0UserId);
 
+    if (
+      String(createProjectDto.clientIndustry || '').trim().toLowerCase() !==
+      LEGAL_CLIENT_INDUSTRY_VALUE
+    ) {
+      throw new BadRequestException(
+        `Only '${LEGAL_CLIENT_INDUSTRY_VALUE}' client industry is supported right now`,
+      );
+    }
+
     // 2. Lookup client industry ID
     const clientIndustry = await this.clientIndustriesRepository.findOne({
       where: { value: createProjectDto.clientIndustry },
@@ -57,6 +71,23 @@ export class ProjectsService {
     if (!projectCategory) {
       throw new NotFoundException(
         `Project category '${createProjectDto.projectCategory}' not found`,
+      );
+    }
+
+    const allowedSystems = getAllowedSystemsForCategory(
+      createProjectDto.projectCategory,
+    );
+    const canonicalSystemName = resolveCanonicalSystemName(
+      createProjectDto.systemName,
+      allowedSystems,
+    );
+
+    if (
+      !canonicalSystemName ||
+      !allowedSystems.includes(canonicalSystemName)
+    ) {
+      throw new BadRequestException(
+        `systemName must be a single supported system for projectCategory '${createProjectDto.projectCategory}'. Allowed values: ${allowedSystems.join(', ')}`,
       );
     }
 
@@ -80,7 +111,7 @@ export class ProjectsService {
     const projectData: Partial<Project> = {
       user_id: user.id,
       project_title: createProjectDto.projectTitle,
-      system_name: createProjectDto.systemName,
+      system_name: canonicalSystemName,
       client_industry_id: clientIndustry.id,
       project_category_id: projectCategory.id,
       project_category_custom:
