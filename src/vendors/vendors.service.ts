@@ -783,8 +783,8 @@ export class VendorsService {
     const rating = this.resolveRating(vendor);
     const description =
       vendor.listing_description || this.generateDescription(vendor);
-    const specialty =
-      vendor.listing_specialty || this.determineSpecialty(vendor);
+    const specialty = this.determineSpecialty(vendor, 2);
+    const specialtyFull = this.determineSpecialty(vendor, 0);
     const startFrom = this.formatStartFrom(vendor.min_project_size_usd);
 
     return {
@@ -799,6 +799,7 @@ export class VendorsService {
       tier,
       description,
       specialty,
+      specialtyFull,
       startFrom,
       matchingScore,
     };
@@ -820,7 +821,8 @@ export class VendorsService {
       tier: vendor.listing_tier || this.calculateTier(vendor),
       description:
         vendor.listing_description || this.generateDescription(vendor),
-      specialty: vendor.listing_specialty || this.determineSpecialty(vendor),
+      specialty: this.determineSpecialty(vendor, 2),
+      specialtyFull: this.determineSpecialty(vendor, 0),
       startFrom: this.formatStartFrom(vendor.min_project_size_usd),
     };
   }
@@ -875,24 +877,58 @@ export class VendorsService {
     );
   }
 
-  private determineSpecialty(vendor: Vendor): string {
-    // Priority: legal_tech_stack > platforms_experience > service_domains
-    if (vendor.legal_tech_stack) {
-      const techs = vendor.legal_tech_stack.split(',').slice(0, 2);
-      return techs.join(', ');
+  private determineSpecialty(vendor: Vendor, maxItems: number): string {
+    const specialtyValues = this.extractSpecialtyValues(vendor);
+    if (specialtyValues.length === 0) {
+      return vendor.vendor_type || 'General IT Services';
     }
 
-    if (vendor.platforms_experience) {
-      const platforms = vendor.platforms_experience.split(',').slice(0, 2);
-      return platforms.join(', ');
-    }
+    const visibleValues =
+      maxItems > 0 ? specialtyValues.slice(0, maxItems) : specialtyValues;
 
-    if (vendor.service_domains) {
-      const domains = vendor.service_domains.split(',')[0];
-      return domains;
-    }
+    return visibleValues.join(', ');
+  }
 
-    return vendor.vendor_type || 'General IT Services';
+  private extractSpecialtyValues(vendor: Vendor): string[] {
+    const primarySpecialties = [
+      ...this.parseListValues(vendor.listing_specialty),
+      ...this.parseListValues(vendor.legal_tech_stack),
+      ...this.parseListValues(vendor.platforms_experience),
+    ];
+    const rawValues =
+      primarySpecialties.length > 0
+        ? primarySpecialties
+        : this.parseListValues(vendor.service_domains);
+
+    const seen = new Set<string>();
+    const deduplicatedValues: string[] = [];
+
+    rawValues.forEach((value) => {
+      const normalizedValue = this.normalizeForDedup(value);
+      if (!normalizedValue || seen.has(normalizedValue)) {
+        return;
+      }
+
+      seen.add(normalizedValue);
+      deduplicatedValues.push(value);
+    });
+
+    return deduplicatedValues;
+  }
+
+  private parseListValues(value: unknown): string[] {
+    return String(value || '')
+      .split(/[;,]+/g)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  private normalizeForDedup(value: string): string {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9+\s.-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private formatLocation(vendor: Vendor): string {

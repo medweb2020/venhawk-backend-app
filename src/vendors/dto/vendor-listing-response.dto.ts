@@ -11,5 +11,6 @@ export class VendorListingResponseDto {
   tier: string;
   description: string;
   specialty: string;
+  specialtyFull?: string;
   startFrom: string;
 }

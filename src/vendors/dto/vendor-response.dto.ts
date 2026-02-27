@@ -10,6 +10,7 @@ export class VendorResponseDto {
   tier: string;
   description: string;
   specialty: string;
+  specialtyFull?: string;
   startFrom: string;
   matchingScore: number;
   rawScore?: number;

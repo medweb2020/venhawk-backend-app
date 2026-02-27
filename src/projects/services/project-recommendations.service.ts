@@ -18,6 +18,7 @@ import {
 import {
   getAllowedSystemsForCategory,
   LEGAL_CLIENT_INDUSTRY_VALUE,
+  normalizeMatchingText,
   PROJECT_CATEGORY_ELIGIBILITY_KEYWORDS,
   PROJECT_CATEGORY_SYSTEM_OPTIONS,
   resolveCanonicalSystemName,
@@ -42,6 +43,7 @@ export class ProjectRecommendationsService {
   private readonly BASE_RECOMMENDATION_LIMIT = 6;
   private readonly OVERFLOW_DISPLAY_SCORE_THRESHOLD = 70;
   private readonly MAX_RAW_SCORE = 100;
+  private readonly LISTING_SPECIALTY_LIMIT = 2;
 
   private readonly WEIGHTS = {
     CAPABILITY: 40,
@@ -130,7 +132,7 @@ export class ProjectRecommendationsService {
       await this.projectRecommendationReasoningService.generateTopMatchReasons(
         project.id,
         this.toProjectReasoningInput(project),
-        scored.map((result) => this.toReasoningVendorInput(result)),
+        scored.map((result) => this.toReasoningVendorInput(result, project)),
       );
 
     const computedAt = new Date();
@@ -165,6 +167,7 @@ export class ProjectRecommendationsService {
       recommendedVendors: scored.map((result) =>
         this.toVendorResponseDto(
           result.vendor,
+          project,
           result.displayScore,
           result.rawScore,
           this.attachReasonToBreakdown(
@@ -240,6 +243,7 @@ export class ProjectRecommendationsService {
 
         return this.toVendorResponseDto(
           match.vendor,
+          project,
           match.display_score,
           Number(match.raw_score),
           scoreBreakdown,
@@ -635,6 +639,7 @@ export class ProjectRecommendationsService {
 
   private toReasoningVendorInput(
     result: VendorRecommendationResult,
+    project: Project,
   ): RecommendationVendorReasoningInput {
     const vendor = result.vendor;
     const ratingSignals = this.extractRatingSignals(vendor);
@@ -649,9 +654,7 @@ export class ProjectRecommendationsService {
       matchingScore: result.displayScore,
       tier: vendor.listing_tier || this.calculateTier(vendor),
       legalFocusLevel: String(vendor.legal_focus_level || 'Some'),
-      specialty: String(
-        vendor.listing_specialty || this.determineSpecialty(vendor),
-      ),
+      specialty: this.buildVendorSpecialty(vendor, project, 3),
       serviceDomains: this.parseCsvValues(vendor.service_domains, 3),
       legalTechStack: this.parseCsvValues(vendor.legal_tech_stack, 4),
       topStrengths: this.extractTopStrengthLabels(result.breakdown),
@@ -775,6 +778,7 @@ export class ProjectRecommendationsService {
 
   private toVendorResponseDto(
     vendor: Vendor,
+    project: Project,
     matchingScore: number,
     rawScore: number,
     scoreBreakdown: Record<string, unknown>,
@@ -783,6 +787,12 @@ export class ProjectRecommendationsService {
   ): VendorResponseDto {
     const tier = vendor.listing_tier || this.calculateTier(vendor);
     const logo = this.generateLogo(vendor.brand_name);
+    const specialty = this.buildVendorSpecialty(
+      vendor,
+      project,
+      this.LISTING_SPECIALTY_LIMIT,
+    );
+    const specialtyFull = this.buildVendorSpecialty(vendor, project, 0);
 
     const response: VendorResponseDto = {
       id: vendor.id,
@@ -796,7 +806,8 @@ export class ProjectRecommendationsService {
       tier,
       description:
         vendor.listing_description || this.generateDescription(vendor),
-      specialty: vendor.listing_specialty || this.determineSpecialty(vendor),
+      specialty,
+      specialtyFull,
       startFrom: this.formatStartFrom(vendor.min_project_size_usd),
       matchingScore,
       rawScore: Number(rawScore.toFixed(2)),
@@ -981,20 +992,154 @@ export class ProjectRecommendationsService {
     );
   }
 
-  private determineSpecialty(vendor: Vendor): string {
-    if (vendor.legal_tech_stack) {
-      return vendor.legal_tech_stack.split(',').slice(0, 2).join(', ');
+  private buildVendorSpecialty(
+    vendor: Vendor,
+    project: Project,
+    maxItems: number,
+  ): string {
+    const specialties = this.extractVendorSpecialtyValues(vendor);
+    if (specialties.length === 0) {
+      return vendor.vendor_type || 'General IT Services';
     }
 
-    if (vendor.platforms_experience) {
-      return vendor.platforms_experience.split(',').slice(0, 2).join(', ');
+    const prioritizedSpecialties = this.prioritizeSpecialtiesForProject(
+      specialties,
+      project,
+    );
+    const visibleSpecialties =
+      maxItems > 0
+        ? prioritizedSpecialties.slice(0, maxItems)
+        : prioritizedSpecialties;
+
+    return visibleSpecialties.join(', ');
+  }
+
+  private extractVendorSpecialtyValues(vendor: Vendor): string[] {
+    const primarySpecialties = [
+      ...this.parseListValues(vendor.listing_specialty),
+      ...this.parseListValues(vendor.legal_tech_stack),
+      ...this.parseListValues(vendor.platforms_experience),
+    ];
+    const rawValues =
+      primarySpecialties.length > 0
+        ? primarySpecialties
+        : this.parseListValues(vendor.service_domains);
+
+    const seen = new Set<string>();
+    const deduplicatedValues: string[] = [];
+
+    rawValues.forEach((value) => {
+      const normalizedValue = normalizeMatchingText(value);
+      if (!normalizedValue || seen.has(normalizedValue)) {
+        return;
+      }
+
+      seen.add(normalizedValue);
+      deduplicatedValues.push(value);
+    });
+
+    return deduplicatedValues;
+  }
+
+  private parseListValues(value: unknown): string[] {
+    return String(value || '')
+      .split(/[;,]+/g)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  private prioritizeSpecialtiesForProject(
+    specialties: string[],
+    project: Project,
+  ): string[] {
+    const projectSystemText = normalizeMatchingText(project.system_name);
+    const projectSystemTokens = this.extractProjectSystemTokens(projectSystemText);
+
+    if (!projectSystemText) {
+      return specialties;
     }
 
-    if (vendor.service_domains) {
-      return vendor.service_domains.split(',')[0];
+    return specialties
+      .map((specialty, index) => ({
+        specialty,
+        index,
+        relevance: this.scoreSpecialtyRelevance(
+          specialty,
+          projectSystemText,
+          projectSystemTokens,
+        ),
+      }))
+      .sort((a, b) => {
+        if (b.relevance !== a.relevance) {
+          return b.relevance - a.relevance;
+        }
+
+        return a.index - b.index;
+      })
+      .map((entry) => entry.specialty);
+  }
+
+  private extractProjectSystemTokens(projectSystemText: string): string[] {
+    return projectSystemText
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter(
+        (token) =>
+          token.length >= 3 &&
+          ![
+            'and',
+            'for',
+            'with',
+            'the',
+            'app',
+            'apps',
+            'system',
+            'systems',
+            'terms',
+          ].includes(token),
+      );
+  }
+
+  private scoreSpecialtyRelevance(
+    specialty: string,
+    projectSystemText: string,
+    projectSystemTokens: string[],
+  ): number {
+    const normalizedSpecialty = normalizeMatchingText(specialty);
+    if (!normalizedSpecialty) {
+      return 0;
     }
 
-    return vendor.vendor_type || 'General IT Services';
+    let score = 0;
+
+    if (normalizedSpecialty === projectSystemText) {
+      score += 6;
+    }
+
+    if (normalizedSpecialty.includes(projectSystemText)) {
+      score += 5;
+    }
+
+    if (
+      projectSystemText.includes(normalizedSpecialty) &&
+      normalizedSpecialty.length >= 4
+    ) {
+      score += 4;
+    }
+
+    projectSystemTokens.forEach((token) => {
+      if (!normalizedSpecialty.includes(token)) {
+        return;
+      }
+
+      score += 2;
+
+      if (normalizedSpecialty.startsWith(token)) {
+        score += 0.5;
+      }
+    });
+
+    return score;
   }
 
   private formatLocation(vendor: Vendor): string {
