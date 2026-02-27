@@ -16,9 +16,7 @@ import { UsersService } from '../users/users.service';
 import { ProjectRecommendationsService } from './services/project-recommendations.service';
 import { VendorListingFiltersDto } from '../vendors/dto/vendor-listing-filters.dto';
 import {
-  getAllowedSystemsForCategory,
   LEGAL_CLIENT_INDUSTRY_VALUE,
-  resolveCanonicalSystemName,
 } from './constants/project-matching.constants';
 
 @Injectable()
@@ -74,23 +72,6 @@ export class ProjectsService {
       );
     }
 
-    const allowedSystems = getAllowedSystemsForCategory(
-      createProjectDto.projectCategory,
-    );
-    const canonicalSystemName = resolveCanonicalSystemName(
-      createProjectDto.systemName,
-      allowedSystems,
-    );
-
-    if (
-      !canonicalSystemName ||
-      !allowedSystems.includes(canonicalSystemName)
-    ) {
-      throw new BadRequestException(
-        `systemName must be a single supported system for projectCategory '${createProjectDto.projectCategory}'. Allowed values: ${allowedSystems.join(', ')}`,
-      );
-    }
-
     // 4. Validate budget ranges
     if (createProjectDto.budgetType === 'range') {
       const minBudget = parseFloat(
@@ -111,7 +92,7 @@ export class ProjectsService {
     const projectData: Partial<Project> = {
       user_id: user.id,
       project_title: createProjectDto.projectTitle,
-      system_name: canonicalSystemName,
+      system_name: String(createProjectDto.systemName || '').trim(),
       client_industry_id: clientIndustry.id,
       project_category_id: projectCategory.id,
       project_category_custom:

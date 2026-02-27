@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { createHash } from 'crypto';
 import { Project } from '../entities/project.entity';
 import { ProjectVendorMatch } from '../entities/project-vendor-match.entity';
+import { VendorProjectCategory } from '../entities/vendor-project-category.entity';
 import { Vendor } from '../../vendors/entities/vendor.entity';
 import { VendorResponseDto } from '../../vendors/dto/vendor-response.dto';
 import { ProjectRecommendationsResponseDto } from '../dto/project-recommendations-response.dto';
@@ -16,13 +17,10 @@ import {
   RecommendationVendorReasoningInput,
 } from './project-recommendation-reasoning.service';
 import {
-  getAllowedSystemsForCategory,
+  extractPrimarySystemKeyword,
   LEGAL_CLIENT_INDUSTRY_VALUE,
   normalizeMatchingText,
-  PROJECT_CATEGORY_ELIGIBILITY_KEYWORDS,
-  PROJECT_CATEGORY_SYSTEM_OPTIONS,
-  resolveCanonicalSystemName,
-  textSupportsCanonicalSystem,
+  textContainsSystemKeyword,
 } from '../constants/project-matching.constants';
 
 interface DimensionScore {
@@ -60,24 +58,6 @@ export class ProjectRecommendationsService {
     },
   };
 
-  private readonly CATEGORY_KEYWORDS: Record<string, string[]> = {
-    'legal-apps': [
-      'legal',
-      'document management',
-      'imanage',
-      'netdocuments',
-      'intapp',
-    ],
-    'cloud-migration': ['cloud', 'azure', 'aws', 'gcp', 'modernization'],
-    'enterprise-it': [
-      'enterprise',
-      'servicenow',
-      'workday',
-      'microsoft 365',
-      'm365',
-    ],
-    'app-bug-fixes': ['upgrade', 'integration', 'api', 'legacy modernization'],
-  };
   private readonly SCORING_VERSION = this.buildScoringVersion();
 
   constructor(
@@ -87,6 +67,8 @@ export class ProjectRecommendationsService {
     private readonly vendorsRepository: Repository<Vendor>,
     @InjectRepository(ProjectVendorMatch)
     private readonly projectVendorMatchesRepository: Repository<ProjectVendorMatch>,
+    @InjectRepository(VendorProjectCategory)
+    private readonly vendorProjectCategoriesRepository: Repository<VendorProjectCategory>,
     private readonly vendorsService: VendorsService,
     private readonly projectRecommendationReasoningService: ProjectRecommendationReasoningService,
   ) {}
@@ -103,12 +85,24 @@ export class ProjectRecommendationsService {
       })
       .getMany();
 
+    const vendorIdsMappedToProjectCategory =
+      await this.getVendorIdsMappedToProjectCategory(
+        project.project_category_id,
+        vendors.map((vendor) => vendor.id),
+      );
+
     const eligibleVendors = vendors.filter((vendor) =>
-      this.isVendorEligibleForProject(vendor, project),
+      this.isVendorEligibleForProject(
+        vendor,
+        project,
+        vendorIdsMappedToProjectCategory,
+      ),
     );
 
     const ranked = eligibleVendors
-      .map((vendor) => this.scoreVendor(vendor, project))
+      .map((vendor) =>
+        this.scoreVendor(vendor, project, vendorIdsMappedToProjectCategory),
+      )
       .filter((result) => result.rawScore > 0)
       .sort((a, b) => {
         if (b.rawScore !== a.rawScore) {
@@ -273,79 +267,75 @@ export class ProjectRecommendationsService {
     return project;
   }
 
-  private isVendorEligibleForProject(vendor: Vendor, project: Project): boolean {
+  private async getVendorIdsMappedToProjectCategory(
+    projectCategoryId: number,
+    vendorIds: number[],
+  ): Promise<Set<number>> {
+    if (!projectCategoryId || vendorIds.length === 0) {
+      return new Set<number>();
+    }
+
+    const rows = await this.vendorProjectCategoriesRepository
+      .createQueryBuilder('vpc')
+      .select('vpc.vendor_id', 'vendor_id')
+      .where('vpc.project_category_id = :projectCategoryId', {
+        projectCategoryId,
+      })
+      .andWhere('vpc.vendor_id IN (:...vendorIds)', { vendorIds })
+      .getRawMany<{ vendor_id: string }>();
+
+    return new Set(rows.map((row) => Number(row.vendor_id)));
+  }
+
+  private isVendorEligibleForProject(
+    vendor: Vendor,
+    project: Project,
+    vendorIdsMappedToProjectCategory: Set<number>,
+  ): boolean {
     const projectIndustry = this.resolveProjectIndustryValue(project);
     if (projectIndustry !== LEGAL_CLIENT_INDUSTRY_VALUE) {
       return false;
     }
 
-    if (String(vendor.legal_focus_level || '').trim().toLowerCase() === 'none') {
+    if (!vendorIdsMappedToProjectCategory.has(vendor.id)) {
       return false;
     }
 
-    const projectCategory = this.resolveProjectCategoryValue(project);
-    const categoryKeywords =
-      PROJECT_CATEGORY_ELIGIBILITY_KEYWORDS[projectCategory] || [];
-    if (categoryKeywords.length === 0) {
+    const projectSystemKeyword = this.resolveProjectSystemKeyword(project);
+    if (!projectSystemKeyword) {
       return false;
     }
 
-    const canonicalProjectSystem = this.resolveProjectCanonicalSystem(
-      project,
-      projectCategory,
-    );
-    if (!canonicalProjectSystem) {
-      return false;
-    }
-
-    const vendorEligibilityText = this.toSearchText(
-      vendor.vendor_type,
-      vendor.listing_specialty,
-      vendor.listing_description,
-      vendor.service_domains,
-      vendor.platforms_experience,
-      vendor.legal_tech_stack,
-    );
-
-    const categoryMatched = categoryKeywords.some((keyword) =>
-      vendorEligibilityText.includes(keyword),
-    );
-    if (!categoryMatched) {
-      return false;
-    }
-
-    return textSupportsCanonicalSystem(
-      vendorEligibilityText,
-      canonicalProjectSystem,
-    );
+    return this.vendorSupportsSystemKeyword(vendor, projectSystemKeyword);
   }
 
   private resolveProjectIndustryValue(project: Project): string {
     return String(project.clientIndustry?.value || '').trim().toLowerCase();
   }
 
-  private resolveProjectCategoryValue(project: Project): string {
-    return String(project.projectCategory?.value || '').trim().toLowerCase();
+  private resolveProjectSystemKeyword(project: Project): string | null {
+    return extractPrimarySystemKeyword(project.system_name);
   }
 
-  private resolveProjectCanonicalSystem(
-    project: Project,
-    projectCategoryValue: string,
-  ): string | null {
-    const allowedSystems = getAllowedSystemsForCategory(projectCategoryValue);
-    const canonicalSystem = resolveCanonicalSystemName(
-      project.system_name,
-      allowedSystems,
+  private vendorSupportsSystemKeyword(
+    vendor: Vendor,
+    projectSystemKeyword: string,
+  ): boolean {
+    return textContainsSystemKeyword(
+      String(vendor.legal_tech_stack || ''),
+      projectSystemKeyword,
     );
-
-    return canonicalSystem || null;
   }
 
   private scoreVendor(
     vendor: Vendor,
     project: Project,
+    vendorIdsMappedToProjectCategory: Set<number>,
   ): VendorRecommendationResult {
-    const capability = this.calculateCapabilityScore(vendor, project);
+    const capability = this.calculateCapabilityScore(
+      vendor,
+      vendorIdsMappedToProjectCategory,
+    );
     const system = this.calculateSystemScore(vendor, project);
     const pricing = this.calculatePricingScore(vendor, project);
     const timeline = this.calculateTimelineScore(vendor, project);
@@ -391,39 +381,11 @@ export class ProjectRecommendationsService {
 
   private calculateCapabilityScore(
     vendor: Vendor,
-    project: Project,
+    vendorIdsMappedToProjectCategory: Set<number>,
   ): DimensionScore {
-    const categoryValue = project.projectCategory?.value || '';
-    const categoryKeywords =
-      this.CATEGORY_KEYWORDS[categoryValue] || this.CATEGORY_KEYWORDS.other;
-    const vendorText = this.toSearchText(
-      vendor.service_domains,
-      vendor.vendor_type,
-      vendor.listing_specialty,
-      vendor.listing_description,
-      vendor.legal_tech_stack,
-    );
-
-    let normalized = 0.4;
-
-    if (categoryKeywords.length > 0) {
-      const matched = categoryKeywords.filter((keyword) =>
-        vendorText.includes(keyword),
-      ).length;
-      normalized = matched > 0 ? matched / categoryKeywords.length : 0.1;
-    }
-
-    const isLegalProject = categoryValue.includes('legal');
-    if (isLegalProject) {
-      if (vendor.legal_focus_level === 'Legal-only') normalized += 0.2;
-      else if (vendor.legal_focus_level === 'Strong') normalized += 0.15;
-      else if (vendor.legal_focus_level === 'Some') normalized += 0.08;
-    }
-
-    const points = this.pointsFromNormalized(
-      normalized,
-      this.WEIGHTS.CAPABILITY,
-    );
+    const points = vendorIdsMappedToProjectCategory.has(vendor.id)
+      ? this.WEIGHTS.CAPABILITY
+      : 0;
     return { points, maxPoints: this.WEIGHTS.CAPABILITY };
   }
 
@@ -431,25 +393,12 @@ export class ProjectRecommendationsService {
     vendor: Vendor,
     project: Project,
   ): DimensionScore {
-    const projectCategoryValue = this.resolveProjectCategoryValue(project);
-    const canonicalProjectSystem = this.resolveProjectCanonicalSystem(
-      project,
-      projectCategoryValue,
-    );
-
-    if (!canonicalProjectSystem) {
+    const projectSystemKeyword = this.resolveProjectSystemKeyword(project);
+    if (!projectSystemKeyword) {
       return { points: 0, maxPoints: this.WEIGHTS.SYSTEM };
     }
 
-    const vendorText = this.toSearchText(
-      vendor.legal_tech_stack,
-      vendor.platforms_experience,
-      vendor.service_domains,
-      vendor.listing_specialty,
-      vendor.listing_description,
-    );
-
-    const points = textSupportsCanonicalSystem(vendorText, canonicalProjectSystem)
+    const points = this.vendorSupportsSystemKeyword(vendor, projectSystemKeyword)
       ? this.WEIGHTS.SYSTEM
       : 0;
 
@@ -907,13 +856,13 @@ export class ProjectRecommendationsService {
     const signature = JSON.stringify({
       maxRawScore: this.MAX_RAW_SCORE,
       weights: this.WEIGHTS,
-      categoryKeywords: this.CATEGORY_KEYWORDS,
       eligibilityPolicy: {
         legalClientIndustryOnly: LEGAL_CLIENT_INDUSTRY_VALUE,
         strictCategoryGate: true,
+        categoryMatchSource: 'vendor_project_categories',
         strictSystemGate: true,
-        categorySystemOptions: PROJECT_CATEGORY_SYSTEM_OPTIONS,
-        categoryEligibilityKeywords: PROJECT_CATEGORY_ELIGIBILITY_KEYWORDS,
+        projectSystemMatchMode: 'first-word',
+        vendorSystemField: 'legal_tech_stack',
       },
       reasoningPolicy: {
         topMatchesOnly: true,
