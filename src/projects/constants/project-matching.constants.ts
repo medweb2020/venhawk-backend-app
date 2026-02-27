@@ -153,3 +153,30 @@ export const textSupportsCanonicalSystem = (
   const normalizedText = normalizeMatchingText(text);
   return aliases.some((alias) => containsAlias(normalizedText, alias));
 };
+
+export const extractPrimarySystemKeyword = (
+  rawSystemName: string,
+): string | null => {
+  const normalized = normalizeMatchingText(rawSystemName);
+  if (!normalized) {
+    return null;
+  }
+
+  const firstToken = normalized.split(/\s+/).find(Boolean);
+  return firstToken || null;
+};
+
+export const textContainsSystemKeyword = (
+  text: string,
+  keyword: string,
+): boolean => {
+  const normalizedText = normalizeMatchingText(text);
+  const normalizedKeyword = extractPrimarySystemKeyword(keyword);
+
+  if (!normalizedText || !normalizedKeyword) {
+    return false;
+  }
+
+  const pattern = `\\b${escapeRegex(normalizedKeyword)}\\b`;
+  return new RegExp(pattern, 'i').test(normalizedText);
+};

@@ -11,6 +11,10 @@ import {
   VENDOR_FILTER_GROUPS,
   VendorFilterGroupKey,
 } from './constants/vendor-filters.constants';
+import {
+  extractPrimarySystemKeyword,
+  textContainsSystemKeyword,
+} from '../projects/constants/project-matching.constants';
 
 interface ProjectCriteria {
   projectCategory: string;
@@ -476,16 +480,16 @@ export class VendorsService {
     });
 
     // Filter vendors that support the system name
-    const systemNameLower = projectCriteria.systemName.toLowerCase();
-    const systemSupportingVendors = vendorsWithScores.filter(({ vendor }) => {
-      // Check if vendor has the system in their tech stack or platforms
-      const hasSystemSupport =
-        (vendor.legal_tech_stack &&
-          vendor.legal_tech_stack.toLowerCase().includes(systemNameLower)) ||
-        (vendor.platforms_experience &&
-          vendor.platforms_experience.toLowerCase().includes(systemNameLower));
+    const systemKeyword = extractPrimarySystemKeyword(projectCriteria.systemName);
+    if (!systemKeyword) {
+      return [];
+    }
 
-      return hasSystemSupport;
+    const systemSupportingVendors = vendorsWithScores.filter(({ vendor }) => {
+      return textContainsSystemKeyword(
+        String(vendor.legal_tech_stack || ''),
+        systemKeyword,
+      );
     });
 
     // Filter out vendors with 0 or null matching scores
@@ -590,16 +594,6 @@ export class VendorsService {
       score += 0.2;
     }
 
-    // Legal focus bonus for legal-related projects
-    if (
-      criteria.projectCategory.includes('legal') &&
-      vendor.legal_focus_level
-    ) {
-      if (vendor.legal_focus_level === 'Legal-only') score += 0.3;
-      else if (vendor.legal_focus_level === 'Strong') score += 0.2;
-      else if (vendor.legal_focus_level === 'Some') score += 0.1;
-    }
-
     return Math.min(score, 1); // Cap at 1
   }
 
@@ -607,36 +601,17 @@ export class VendorsService {
     vendor: Vendor,
     criteria: ProjectCriteria,
   ): number {
-    let score = 0;
-    let hasData = false;
-
-    const systemName = criteria.systemName.toLowerCase();
-
-    // Check legal tech stack
-    if (vendor.legal_tech_stack) {
-      hasData = true;
-      const techStack = vendor.legal_tech_stack.toLowerCase();
-      if (techStack.includes(systemName)) {
-        score += 0.6;
-      }
+    const systemKeyword = extractPrimarySystemKeyword(criteria.systemName);
+    if (!systemKeyword) {
+      return 0;
     }
 
-    // Check platforms experience
-    if (vendor.platforms_experience) {
-      hasData = true;
-      const platforms = vendor.platforms_experience.toLowerCase();
-      if (platforms.includes(systemName)) {
-        score += 0.4;
-      }
-    }
-
-    // If no tech stack data available, give neutral score
-    // This ensures vendors without specific system data aren't completely excluded
-    if (!hasData) {
-      return 0.4;
-    }
-
-    return Math.min(score, 1);
+    return textContainsSystemKeyword(
+      String(vendor.legal_tech_stack || ''),
+      systemKeyword,
+    )
+      ? 1
+      : 0;
   }
 
   private calculatePricingFit(
