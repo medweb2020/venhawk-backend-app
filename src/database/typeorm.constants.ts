@@ -14,7 +14,6 @@ import { ProjectVendorReasons20260226000000 } from './migrations/20260226000000-
 import { RecommendationSchemaHardening20260226120000 } from './migrations/20260226120000-recommendation-schema-hardening';
 import { VendorLegalTechStackSystemSupported20260227190000 } from './migrations/20260227190000-vendor-legal-tech-stack-system-supported';
 import { VendorProjectCategoriesReference20260227221000 } from './migrations/20260227221000-vendor-project-categories-reference';
-import { VendorBackfillAndReferenceRepair20260301000000 } from './migrations/20260301000000-vendor-backfill-and-reference-repair';
 
 export const TYPEORM_ENTITIES = [
   User,
@@ -36,7 +35,6 @@ export const TYPEORM_MIGRATIONS = [
   RecommendationSchemaHardening20260226120000,
   VendorLegalTechStackSystemSupported20260227190000,
   VendorProjectCategoriesReference20260227221000,
-  VendorBackfillAndReferenceRepair20260301000000,
 ];
 
 export const TYPEORM_MIGRATIONS_TABLE_NAME = 'typeorm_migrations';
