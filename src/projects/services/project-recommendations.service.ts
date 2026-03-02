@@ -420,7 +420,7 @@ export class ProjectRecommendationsService {
 
     if (!projectBudget || !vendorMin || !vendorMax) {
       return {
-        points: this.WEIGHTS.PRICING * 0.5,
+        points: 0,
         maxPoints: this.WEIGHTS.PRICING,
       };
     }
@@ -429,20 +429,7 @@ export class ProjectRecommendationsService {
       return { points: this.WEIGHTS.PRICING, maxPoints: this.WEIGHTS.PRICING };
     }
 
-    let normalized = 0.1;
-
-    if (projectBudget < vendorMin) {
-      const ratio = projectBudget / vendorMin;
-      if (ratio >= 0.8) normalized = 0.7;
-      else if (ratio >= 0.6) normalized = 0.4;
-    } else {
-      const ratio = vendorMax / projectBudget;
-      if (ratio >= 0.8) normalized = 0.7;
-      else if (ratio >= 0.6) normalized = 0.4;
-    }
-
-    const points = this.pointsFromNormalized(normalized, this.WEIGHTS.PRICING);
-    return { points, maxPoints: this.WEIGHTS.PRICING };
+    return { points: 0, maxPoints: this.WEIGHTS.PRICING };
   }
 
   private calculateTimelineScore(
@@ -451,7 +438,7 @@ export class ProjectRecommendationsService {
   ): DimensionScore {
     if (!project.start_date || !vendor.lead_time_weeks) {
       return {
-        points: this.WEIGHTS.TIMELINE * 0.5,
+        points: 0,
         maxPoints: this.WEIGHTS.TIMELINE,
       };
     }
@@ -521,7 +508,7 @@ export class ProjectRecommendationsService {
     const required = [requiresSoc2, requiresIso27001].filter(Boolean).length;
     if (required === 0) {
       return {
-        points: this.WEIGHTS.CERTIFICATIONS * 0.5,
+        points: 0,
         maxPoints: this.WEIGHTS.CERTIFICATIONS,
       };
     }
