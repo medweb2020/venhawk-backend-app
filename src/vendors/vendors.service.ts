@@ -11,10 +11,7 @@ import {
   VENDOR_FILTER_GROUPS,
   VendorFilterGroupKey,
 } from './constants/vendor-filters.constants';
-import {
-  extractPrimarySystemKeyword,
-  textContainsSystemKeyword,
-} from '../projects/constants/project-matching.constants';
+import { textContainsSystemKeyword } from '../projects/constants/project-matching.constants';
 
 interface ProjectCriteria {
   projectCategory: string;
@@ -480,7 +477,7 @@ export class VendorsService {
     });
 
     // Filter vendors that support the system name
-    const systemKeyword = extractPrimarySystemKeyword(projectCriteria.systemName);
+    const systemKeyword = String(projectCriteria.systemName || '').trim();
     if (!systemKeyword) {
       return [];
     }
@@ -601,7 +598,7 @@ export class VendorsService {
     vendor: Vendor,
     criteria: ProjectCriteria,
   ): number {
-    const systemKeyword = extractPrimarySystemKeyword(criteria.systemName);
+    const systemKeyword = String(criteria.systemName || '').trim();
     if (!systemKeyword) {
       return 0;
     }

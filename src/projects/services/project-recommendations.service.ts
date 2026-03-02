@@ -17,7 +17,6 @@ import {
   RecommendationVendorReasoningInput,
 } from './project-recommendation-reasoning.service';
 import {
-  extractPrimarySystemKeyword,
   LEGAL_CLIENT_INDUSTRY_VALUE,
   normalizeMatchingText,
   textContainsSystemKeyword,
@@ -310,11 +309,14 @@ export class ProjectRecommendationsService {
   }
 
   private resolveProjectIndustryValue(project: Project): string {
-    return String(project.clientIndustry?.value || '').trim().toLowerCase();
+    return String(project.clientIndustry?.value || '')
+      .trim()
+      .toLowerCase();
   }
 
   private resolveProjectSystemKeyword(project: Project): string | null {
-    return extractPrimarySystemKeyword(project.system_name);
+    const normalizedSystemName = normalizeMatchingText(project.system_name);
+    return normalizedSystemName || null;
   }
 
   private vendorSupportsSystemKeyword(
@@ -398,7 +400,10 @@ export class ProjectRecommendationsService {
       return { points: 0, maxPoints: this.WEIGHTS.SYSTEM };
     }
 
-    const points = this.vendorSupportsSystemKeyword(vendor, projectSystemKeyword)
+    const points = this.vendorSupportsSystemKeyword(
+      vendor,
+      projectSystemKeyword,
+    )
       ? this.WEIGHTS.SYSTEM
       : 0;
 
@@ -1002,7 +1007,8 @@ export class ProjectRecommendationsService {
     project: Project,
   ): string[] {
     const projectSystemText = normalizeMatchingText(project.system_name);
-    const projectSystemTokens = this.extractProjectSystemTokens(projectSystemText);
+    const projectSystemTokens =
+      this.extractProjectSystemTokens(projectSystemText);
 
     if (!projectSystemText) {
       return specialties;

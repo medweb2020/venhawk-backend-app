@@ -171,12 +171,39 @@ export const textContainsSystemKeyword = (
   keyword: string,
 ): boolean => {
   const normalizedText = normalizeMatchingText(text);
-  const normalizedKeyword = extractPrimarySystemKeyword(keyword);
+  const primaryKeyword = extractPrimarySystemKeyword(keyword);
+  const normalizedKeyword = normalizeMatchingText(keyword);
 
-  if (!normalizedText || !normalizedKeyword) {
+  if (!normalizedText || (!primaryKeyword && !normalizedKeyword)) {
     return false;
   }
 
-  const pattern = `\\b${escapeRegex(normalizedKeyword)}\\b`;
-  return new RegExp(pattern, 'i').test(normalizedText);
+  if (primaryKeyword) {
+    const primaryPattern = `\\b${escapeRegex(primaryKeyword)}\\b`;
+    if (new RegExp(primaryPattern, 'i').test(normalizedText)) {
+      return true;
+    }
+  }
+
+  if (!normalizedKeyword) {
+    return false;
+  }
+
+  const exactPattern = `\\b${escapeRegex(normalizedKeyword).replace(/\s+/g, '\\s+')}\\b`;
+  if (new RegExp(exactPattern, 'i').test(normalizedText)) {
+    return true;
+  }
+
+  const compactText = String(text || '')
+    .toLowerCase()
+    .replace(/\s+/g, '');
+  const compactKeyword = String(keyword || '')
+    .toLowerCase()
+    .replace(/\s+/g, '');
+  if (!compactText || !compactKeyword) {
+    return false;
+  }
+
+  const compactPattern = `(^|[^a-z0-9])${escapeRegex(compactKeyword)}(?=$|[^a-z0-9])`;
+  return new RegExp(compactPattern, 'i').test(compactText);
 };
