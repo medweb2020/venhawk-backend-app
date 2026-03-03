@@ -857,8 +857,8 @@ export class ProjectRecommendationsService {
         vendorSystemField: 'legal_tech_stack',
       },
       reasoningPolicy: {
-        topMatchesOnly: true,
-        topMatchLimit: 3,
+        allMatchesHaveReason: true,
+        openAiTopMatchLimit: 3,
         minSentences: 2,
         maxSentences: 2,
       },

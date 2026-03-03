@@ -14,6 +14,9 @@ import { ProjectVendorReasons20260226000000 } from './migrations/20260226000000-
 import { RecommendationSchemaHardening20260226120000 } from './migrations/20260226120000-recommendation-schema-hardening';
 import { VendorLegalTechStackSystemSupported20260227190000 } from './migrations/20260227190000-vendor-legal-tech-stack-system-supported';
 import { VendorProjectCategoriesReference20260227221000 } from './migrations/20260227221000-vendor-project-categories-reference';
+import { VendorSystemsAndProjectCategoriesSync20260303010000 } from './migrations/20260303010000-vendor-systems-and-project-categories-sync';
+import { VendorScreenshotSeedAndCategoryLinks20260303023000 } from './migrations/20260303023000-vendor-screenshot-seed-and-category-links';
+import { VendorProfileSourceRefresh20260303050000 } from './migrations/20260303050000-vendor-profile-source-refresh';
 
 export const TYPEORM_ENTITIES = [
   User,
@@ -35,6 +38,9 @@ export const TYPEORM_MIGRATIONS = [
   RecommendationSchemaHardening20260226120000,
   VendorLegalTechStackSystemSupported20260227190000,
   VendorProjectCategoriesReference20260227221000,
+  VendorSystemsAndProjectCategoriesSync20260303010000,
+  VendorScreenshotSeedAndCategoryLinks20260303023000,
+  VendorProfileSourceRefresh20260303050000,
 ];
 
 export const TYPEORM_MIGRATIONS_TABLE_NAME = 'typeorm_migrations';

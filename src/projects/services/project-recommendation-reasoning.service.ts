@@ -52,7 +52,7 @@ export class ProjectRecommendationReasoningService {
     ProjectRecommendationReasoningService.name,
   );
   private readonly model: string;
-  private readonly topMatchReasoningLimit = 3;
+  private readonly openAiReasoningLimit = 3;
   private readonly minReasonSentences = 2;
   private readonly maxReasonSentences = 2;
   private readonly maxReasonChars = 260;
@@ -85,7 +85,7 @@ export class ProjectRecommendationReasoningService {
 
     if (!this.openAiClient) {
       this.logger.warn(
-        'OPENAI_API_KEY is missing. Recommendation tooltip reasoning will use fallback copy.',
+        'OPENAI_API_KEY is missing. Recommendation reasoning will use fallback copy.',
       );
     }
   }
@@ -99,22 +99,21 @@ export class ProjectRecommendationReasoningService {
       return new Map();
     }
 
-    const topCandidates = candidates.slice(0, this.topMatchReasoningLimit);
-    if (topCandidates.length === 0) {
-      return new Map();
+    const openAiCandidates = candidates.slice(0, this.openAiReasoningLimit);
+    const fallbackReasons = this.buildFallbackReasonMap(project, candidates);
+    const resolvedReasons = new Map<number, MatchReason>(fallbackReasons);
+    if (openAiCandidates.length === 0) {
+      return resolvedReasons;
     }
 
-    const fallbackReasons = this.buildFallbackReasonMap(project, topCandidates);
-    const resolvedReasons = new Map<number, MatchReason>(fallbackReasons);
-
     const contextHashByVendorId = new Map<number, string>(
-      topCandidates.map((candidate) => [
+      openAiCandidates.map((candidate) => [
         candidate.vendorId,
         this.computeReasonContextHash(project, candidate),
       ]),
     );
 
-    const vendorIds = topCandidates.map((candidate) => candidate.vendorId);
+    const vendorIds = openAiCandidates.map((candidate) => candidate.vendorId);
     const cachedReasons = await this.projectVendorReasonRepository.find({
       where: {
         project_id: projectId,
@@ -128,7 +127,7 @@ export class ProjectRecommendationReasoningService {
 
     const missingCandidates: RecommendationVendorReasoningInput[] = [];
 
-    for (const candidate of topCandidates) {
+    for (const candidate of openAiCandidates) {
       const cached = cachedByVendorId.get(candidate.vendorId);
       const expectedHash = contextHashByVendorId.get(candidate.vendorId) || '';
 
@@ -215,7 +214,7 @@ export class ProjectRecommendationReasoningService {
           {
             role: 'system',
             content:
-              'You are Venhawk, a B2B vendor matching assistant. Generate focused match explanations for tooltips. Return strict JSON only with shape {"reasons":[{"vendorId":123,"reason":"..."}]}. Each reason must be exactly 2 short sentences, mention concrete system/category fit, reference legal industry relevance, and avoid marketing fluff, repetition, formulas, or internal scoring math.',
+              'You are Venhawk, a B2B vendor matching assistant. Generate focused match explanations for vendor recommendations. Return strict JSON only with shape {"reasons":[{"vendorId":123,"reason":"..."}]}. Each reason must be exactly 2 short sentences, mention concrete system/category fit, reference legal industry relevance, and avoid marketing fluff, repetition, formulas, or internal scoring math.',
           },
           {
             role: 'user',
