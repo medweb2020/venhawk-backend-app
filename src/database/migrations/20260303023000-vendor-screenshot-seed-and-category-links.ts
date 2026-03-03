@@ -1075,11 +1075,32 @@ const VENDOR_UPDATE_COLUMNS = VENDOR_INSERT_COLUMNS.filter(
 );
 
 function buildVendorInsertValues(vendor: VendorSeed): unknown[] {
-  return VENDOR_INSERT_COLUMNS.map((column) => vendor[column]);
+  return VENDOR_INSERT_COLUMNS.map((column) =>
+    normalizeVendorValue(column, vendor[column]),
+  );
 }
 
 function buildVendorUpdateValues(vendor: VendorSeed): unknown[] {
-  return VENDOR_UPDATE_COLUMNS.map((column) => vendor[column]);
+  return VENDOR_UPDATE_COLUMNS.map((column) =>
+    normalizeVendorValue(column, vendor[column]),
+  );
+}
+
+function normalizeVendorValue(
+  column: (typeof VENDOR_INSERT_COLUMNS)[number],
+  value: unknown,
+): unknown {
+  if (column !== 'founded_year' || value === null || value === undefined) {
+    return value;
+  }
+
+  // MySQL YEAR supports 1901-2155 (and 0000). Keep pre-1901 values nullable.
+  const year = Number(value);
+  if (!Number.isFinite(year) || year < 1901 || year > 2155) {
+    return null;
+  }
+
+  return year;
 }
 
 export class VendorScreenshotSeedAndCategoryLinks20260303023000
