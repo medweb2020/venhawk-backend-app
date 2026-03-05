@@ -1,14 +1,27 @@
-import { Controller, Get, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Query,
+  Request,
+  UseGuards,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { VendorListingResponseDto } from './dto/vendor-listing-response.dto';
 import { VendorListingFiltersDto } from './dto/vendor-listing-filters.dto';
 import { VendorListingFilterOptionsResponseDto } from './dto/vendor-listing-filter-options-response.dto';
 import { VendorsService } from './vendors.service';
+import { UsersService } from '../users/users.service';
+import { VendorDetailResponseDto } from './dto/vendor-detail-response.dto';
 
 @Controller('api/vendors')
 @UseGuards(JwtAuthGuard)
 export class VendorsController {
-  constructor(private readonly vendorsService: VendorsService) {}
+  constructor(
+    private readonly vendorsService: VendorsService,
+    private readonly usersService: UsersService,
+  ) {}
 
   @Get('listing')
   async getListingVendors(
@@ -27,5 +40,25 @@ export class VendorsController {
     @Param('vendorId') vendorId: string,
   ): Promise<VendorListingResponseDto> {
     return this.vendorsService.getListingVendorById(vendorId);
+  }
+
+  @Get(':vendorId/detail')
+  async getVendorDetailById(
+    @Param('vendorId') vendorId: string,
+    @Query('projectId') projectId: string | undefined,
+    @Request() req: { user: { userId: string } },
+  ): Promise<VendorDetailResponseDto> {
+    const auth0UserId = String(req?.user?.userId || '').trim();
+    const user = await this.usersService.findByAuth0Id(auth0UserId);
+    if (!user) {
+      throw new NotFoundException(
+        `User with Auth0 ID '${auth0UserId}' not found. Please sync user first.`,
+      );
+    }
+
+    return this.vendorsService.getVendorDetailById(vendorId, {
+      projectId: projectId ? Number(projectId) : null,
+      userId: user.id,
+    });
   }
 }

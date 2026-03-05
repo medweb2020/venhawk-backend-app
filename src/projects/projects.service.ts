@@ -2,7 +2,9 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Project } from './entities/project.entity';
@@ -21,6 +23,9 @@ import {
 
 @Injectable()
 export class ProjectsService {
+  private readonly logger = new Logger(ProjectsService.name);
+  private readonly recommendationsWarmupOnCreate: boolean;
+
   constructor(
     @InjectRepository(Project)
     private projectsRepository: Repository<Project>,
@@ -30,14 +35,21 @@ export class ProjectsService {
     private projectCategoriesRepository: Repository<ProjectCategory>,
     @InjectRepository(ProjectFile)
     private projectFilesRepository: Repository<ProjectFile>,
+    private readonly configService: ConfigService,
     private usersService: UsersService,
     private projectRecommendationsService: ProjectRecommendationsService,
-  ) {}
+  ) {
+    this.recommendationsWarmupOnCreate = this.parseBooleanEnv(
+      this.configService.get<string>('RECOMMENDATIONS_WARMUP_ON_CREATE'),
+      false,
+    );
+  }
 
   async create(
     createProjectDto: CreateProjectDto,
     auth0UserId: string,
   ): Promise<CreateProjectResponseDto> {
+    const startedAt = Date.now();
     // 1. Lookup user by Auth0 ID
     const user = await this.getUserOrThrow(auth0UserId);
 
@@ -160,15 +172,25 @@ export class ProjectsService {
       );
     }
 
-    // 10. Compute and persist recommendations (kept in create response for backward compatibility)
-    const recommendations =
-      await this.projectRecommendationsService.computeAndStoreRecommendations(
-        savedProject.id,
-        user.id,
-      );
-    const matchedVendors = recommendations.recommendedVendors;
+    // 10. Optionally warm up recommendations in background (never blocks create response)
+    if (this.recommendationsWarmupOnCreate) {
+      void this.projectRecommendationsService
+        .computeAndStoreRecommendations(savedProject.id, user.id)
+        .catch((error) => {
+          this.logger.warn(
+            `Background recommendation warmup failed for projectId=${savedProject.id}, userId=${user.id}: ${this.getErrorMessage(
+              error,
+            )}`,
+          );
+        });
+    }
 
-    // 11. Return project with matched vendors
+    const durationMs = Date.now() - startedAt;
+    this.logger.log(
+      `project create completed projectId=${savedProject.id} userId=${user.id} recommendationsStatus=pending recommendedCount=0 durationMs=${durationMs}`,
+    );
+
+    // 11. Return project response quickly with backward-compatible shape
     return {
       project: {
         id: savedProject.id,
@@ -177,7 +199,12 @@ export class ProjectsService {
         status: savedProject.status,
         created_at: savedProject.created_at,
       },
-      matchedVendors,
+      matchedVendors: [],
+      recommendations: {
+        status: 'pending',
+        projectId: savedProject.id,
+        computedAt: null,
+      },
     };
   }
 
@@ -214,5 +241,33 @@ export class ProjectsService {
     }
 
     return user;
+  }
+
+  private parseBooleanEnv(
+    value: string | undefined,
+    defaultValue: boolean,
+  ): boolean {
+    if (typeof value !== 'string') {
+      return defaultValue;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+
+    if (['0', 'false', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+
+    return defaultValue;
+  }
+
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return String(error);
   }
 }

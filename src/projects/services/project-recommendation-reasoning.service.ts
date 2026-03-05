@@ -149,6 +149,7 @@ export class ProjectRecommendationReasoningService {
     }
 
     const generatedReasons = await this.generateOpenAiReasons(
+      projectId,
       project,
       missingCandidates,
     );
@@ -198,6 +199,7 @@ export class ProjectRecommendationReasoningService {
   }
 
   private async generateOpenAiReasons(
+    projectId: number,
     project: RecommendationProjectReasoningInput,
     candidates: RecommendationVendorReasoningInput[],
   ): Promise<Map<number, string>> {
@@ -205,6 +207,7 @@ export class ProjectRecommendationReasoningService {
       return new Map();
     }
 
+    const startedAt = Date.now();
     try {
       const completion = await this.openAiClient.chat.completions.create({
         model: this.model,
@@ -239,10 +242,14 @@ export class ProjectRecommendationReasoningService {
       });
 
       const rawContent = completion.choices?.[0]?.message?.content || '';
-      return this.parseModelReasonResponse(rawContent, candidates);
+      const parsedReasons = this.parseModelReasonResponse(rawContent, candidates);
+      this.logger.log(
+        `openai reasoning completed projectId=${projectId} requestedCount=${candidates.length} generatedCount=${parsedReasons.size} durationMs=${Date.now() - startedAt}`,
+      );
+      return parsedReasons;
     } catch (error) {
       this.logger.warn(
-        `OpenAI reasoning generation failed for project "${project.projectTitle}": ${this.getErrorMessage(
+        `OpenAI reasoning generation failed for projectId=${projectId} projectTitle="${project.projectTitle}" durationMs=${Date.now() - startedAt}: ${this.getErrorMessage(
           error,
         )}`,
       );
