@@ -2,16 +2,28 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
 import { Vendor } from './entities/vendor.entity';
+import { VendorClient } from './entities/vendor-client.entity';
+import { VendorCaseStudy } from './entities/vendor-case-study.entity';
+import { VendorReview } from './entities/vendor-review.entity';
 import { VendorResponseDto } from './dto/vendor-response.dto';
 import { VendorListingResponseDto } from './dto/vendor-listing-response.dto';
 import { VendorListingFiltersDto } from './dto/vendor-listing-filters.dto';
 import { VendorListingFilterOptionsResponseDto } from './dto/vendor-listing-filter-options-response.dto';
+import {
+  VendorDetailCaseStudyDto,
+  VendorDetailClientDto,
+  VendorDetailResponseDto,
+  VendorDetailReviewDto,
+} from './dto/vendor-detail-response.dto';
 import {
   VENDOR_FILTER_ALLOWED_VALUES,
   VENDOR_FILTER_GROUPS,
   VendorFilterGroupKey,
 } from './constants/vendor-filters.constants';
 import { textContainsSystemKeyword } from '../projects/constants/project-matching.constants';
+import { Project } from '../projects/entities/project.entity';
+import { ProjectVendorMatch } from '../projects/entities/project-vendor-match.entity';
+import { ProjectVendorReason } from '../projects/entities/project-vendor-reason.entity';
 
 interface ProjectCriteria {
   projectCategory: string;
@@ -29,6 +41,16 @@ interface VendorListingFilters {
   startTimeline: string[];
   verifiedCertifications: string[];
   clientValidation: string[];
+}
+
+interface VendorDetailContextOptions {
+  projectId: number | null;
+  userId: number;
+}
+
+interface VendorProjectContext {
+  projectId: number;
+  projectCategoryId: number | null;
 }
 
 @Injectable()
@@ -190,6 +212,18 @@ export class VendorsService {
   constructor(
     @InjectRepository(Vendor)
     private vendorsRepository: Repository<Vendor>,
+    @InjectRepository(VendorClient)
+    private vendorClientsRepository: Repository<VendorClient>,
+    @InjectRepository(VendorCaseStudy)
+    private vendorCaseStudiesRepository: Repository<VendorCaseStudy>,
+    @InjectRepository(VendorReview)
+    private vendorReviewsRepository: Repository<VendorReview>,
+    @InjectRepository(Project)
+    private projectsRepository: Repository<Project>,
+    @InjectRepository(ProjectVendorMatch)
+    private projectVendorMatchesRepository: Repository<ProjectVendorMatch>,
+    @InjectRepository(ProjectVendorReason)
+    private projectVendorReasonsRepository: Repository<ProjectVendorReason>,
   ) {}
 
   async getListingFilterOptions(): Promise<VendorListingFilterOptionsResponseDto> {
@@ -253,6 +287,357 @@ export class VendorsService {
     }
 
     return this.transformToListingResponseDto(vendor);
+  }
+
+  async getVendorDetailById(
+    vendorId: string,
+    context: VendorDetailContextOptions,
+  ): Promise<VendorDetailResponseDto> {
+    const vendor = await this.vendorsRepository
+      .createQueryBuilder('vendor')
+      .where('vendor.vendor_id = :vendorId', { vendorId })
+      .andWhere('vendor.status IN (:...statuses)', {
+        statuses: this.LISTING_STATUSES,
+      })
+      .getOne();
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found');
+    }
+
+    const projectContext = await this.resolveProjectContext(
+      context.projectId,
+      context.userId,
+    );
+
+    const [clients, caseStudies, reviews, matchReason] = await Promise.all([
+      this.getVendorClients(vendor.id, projectContext?.projectCategoryId || null),
+      this.getVendorCaseStudies(
+        vendor.id,
+        projectContext?.projectCategoryId || null,
+      ),
+      this.getVendorReviews(vendor.id, projectContext?.projectCategoryId || null),
+      this.resolveProjectMatchReason(vendor.id, projectContext?.projectId || null),
+    ]);
+
+    return this.transformToVendorDetailResponseDto(
+      vendor,
+      clients,
+      caseStudies,
+      reviews,
+      matchReason,
+    );
+  }
+
+  private async resolveProjectContext(
+    projectId: number | null,
+    userId: number,
+  ): Promise<VendorProjectContext | null> {
+    if (!projectId || !Number.isInteger(projectId) || projectId <= 0) {
+      return null;
+    }
+
+    const project = await this.projectsRepository.findOne({
+      where: {
+        id: projectId,
+        user_id: userId,
+      },
+      select: {
+        id: true,
+        project_category_id: true,
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException('Project not found');
+    }
+
+    return {
+      projectId: project.id,
+      projectCategoryId: Number(project.project_category_id) || null,
+    };
+  }
+
+  private async getVendorClients(
+    vendorId: number,
+    projectCategoryId: number | null,
+  ): Promise<VendorClient[]> {
+    const queryBuilder = this.vendorClientsRepository
+      .createQueryBuilder('client')
+      .where('client.vendor_id = :vendorId', { vendorId });
+
+    if (projectCategoryId) {
+      queryBuilder
+        .andWhere(
+          '(client.project_category_id = :projectCategoryId OR client.project_category_id IS NULL)',
+          { projectCategoryId },
+        )
+        .orderBy(
+          'CASE WHEN client.project_category_id = :projectCategoryId THEN 0 ELSE 1 END',
+          'ASC',
+        )
+        .setParameter('projectCategoryId', projectCategoryId);
+    } else {
+      queryBuilder.andWhere('client.project_category_id IS NULL');
+    }
+
+    return queryBuilder
+      .addOrderBy('client.display_order', 'ASC')
+      .addOrderBy('client.id', 'ASC')
+      .getMany();
+  }
+
+  private async getVendorCaseStudies(
+    vendorId: number,
+    projectCategoryId: number | null,
+  ): Promise<VendorCaseStudy[]> {
+    const queryBuilder = this.vendorCaseStudiesRepository
+      .createQueryBuilder('caseStudy')
+      .where('caseStudy.vendor_id = :vendorId', { vendorId });
+
+    if (projectCategoryId) {
+      queryBuilder
+        .andWhere(
+          '(caseStudy.project_category_id = :projectCategoryId OR caseStudy.project_category_id IS NULL)',
+          { projectCategoryId },
+        )
+        .orderBy(
+          'CASE WHEN caseStudy.project_category_id = :projectCategoryId THEN 0 ELSE 1 END',
+          'ASC',
+        )
+        .setParameter('projectCategoryId', projectCategoryId);
+    } else {
+      queryBuilder.andWhere('caseStudy.project_category_id IS NULL');
+    }
+
+    return queryBuilder
+      .addOrderBy('caseStudy.display_order', 'ASC')
+      .addOrderBy('caseStudy.id', 'ASC')
+      .getMany();
+  }
+
+  private async getVendorReviews(
+    vendorId: number,
+    projectCategoryId: number | null,
+  ): Promise<VendorReview[]> {
+    const queryBuilder = this.vendorReviewsRepository
+      .createQueryBuilder('review')
+      .where('review.vendor_id = :vendorId', { vendorId });
+
+    if (projectCategoryId) {
+      queryBuilder
+        .andWhere(
+          '(review.project_category_id = :projectCategoryId OR review.project_category_id IS NULL)',
+          { projectCategoryId },
+        )
+        .orderBy(
+          'CASE WHEN review.project_category_id = :projectCategoryId THEN 0 ELSE 1 END',
+          'ASC',
+        )
+        .setParameter('projectCategoryId', projectCategoryId);
+    } else {
+      queryBuilder.andWhere('review.project_category_id IS NULL');
+    }
+
+    return queryBuilder
+      .addOrderBy('review.display_order', 'ASC')
+      .addOrderBy('review.id', 'ASC')
+      .getMany();
+  }
+
+  private async resolveProjectMatchReason(
+    vendorId: number,
+    projectId: number | null,
+  ): Promise<{ text: string; source: 'openai' | 'fallback' } | null> {
+    if (!projectId) {
+      return null;
+    }
+
+    const match = await this.projectVendorMatchesRepository
+      .createQueryBuilder('match')
+      .where('match.project_id = :projectId', { projectId })
+      .andWhere('match.vendor_id = :vendorId', { vendorId })
+      .getOne();
+
+    const reasonFromBreakdown = this.extractMatchReasonFromBreakdown(
+      match?.score_breakdown_json,
+    );
+    if (reasonFromBreakdown) {
+      return reasonFromBreakdown;
+    }
+
+    const cachedReason = await this.projectVendorReasonsRepository
+      .createQueryBuilder('reason')
+      .where('reason.project_id = :projectId', { projectId })
+      .andWhere('reason.vendor_id = :vendorId', { vendorId })
+      .getOne();
+
+    if (!cachedReason?.reason_text) {
+      return null;
+    }
+
+    return {
+      text: String(cachedReason.reason_text).trim(),
+      source: cachedReason.reason_source === 'openai' ? 'openai' : 'fallback',
+    };
+  }
+
+  private extractMatchReasonFromBreakdown(
+    scoreBreakdown: Record<string, unknown> | null | undefined,
+  ): { text: string; source: 'openai' | 'fallback' } | null {
+    if (!scoreBreakdown || typeof scoreBreakdown !== 'object') {
+      return null;
+    }
+
+    const reasonText = String(scoreBreakdown['matchingReason'] || '').trim();
+    if (!reasonText) {
+      return null;
+    }
+
+    const source =
+      scoreBreakdown['matchingReasonSource'] === 'openai'
+        ? 'openai'
+        : 'fallback';
+
+    return {
+      text: reasonText,
+      source,
+    };
+  }
+
+  private transformToVendorDetailResponseDto(
+    vendor: Vendor,
+    clients: VendorClient[],
+    caseStudies: VendorCaseStudy[],
+    reviews: VendorReview[],
+    matchReason: { text: string; source: 'openai' | 'fallback' } | null,
+  ): VendorDetailResponseDto {
+    const listingDto = this.transformToListingResponseDto(vendor);
+    const detailClients = this.dedupeVendorClients(clients);
+    const detailCaseStudies = this.dedupeVendorCaseStudies(caseStudies);
+    const detailReviews = this.dedupeVendorReviews(reviews).map((review) =>
+      this.toVendorDetailReviewDto(review),
+    );
+    const response: VendorDetailResponseDto = {
+      ...listingDto,
+      keyClients: detailClients.map((client) => this.toVendorDetailClientDto(client)),
+      caseStudies: detailCaseStudies.map((caseStudy) =>
+        this.toVendorDetailCaseStudyDto(caseStudy),
+      ),
+      reviews: detailReviews,
+    };
+
+    if (matchReason?.text) {
+      response.matchingReason = matchReason.text;
+      response.matchingReasonSource = matchReason.source;
+    }
+
+    return response;
+  }
+
+  private toVendorDetailClientDto(client: VendorClient): VendorDetailClientDto {
+    return {
+      id: Number(client.id),
+      name: String(client.client_name || '').trim(),
+      logoUrl: client.client_logo_url || null,
+      websiteUrl: client.client_website_url || null,
+      sourceName: client.source_name || null,
+      sourceUrl: client.source_url || null,
+    };
+  }
+
+  private toVendorDetailCaseStudyDto(
+    caseStudy: VendorCaseStudy,
+  ): VendorDetailCaseStudyDto {
+    return {
+      id: Number(caseStudy.id),
+      title: String(caseStudy.title || '').trim(),
+      summary: String(caseStudy.summary || '').trim(),
+      studyUrl: caseStudy.study_url || null,
+      sourceName: caseStudy.source_name || null,
+      sourceUrl: caseStudy.source_url || null,
+    };
+  }
+
+  private toVendorDetailReviewDto(review: VendorReview): VendorDetailReviewDto {
+    return {
+      id: Number(review.id),
+      reviewerName: String(review.reviewer_name || '').trim(),
+      reviewerRole: review.reviewer_role || null,
+      headline: review.headline || null,
+      quote: String(review.review_text || '').trim(),
+      rating: this.toNullablePositiveNumber(review.rating),
+      source: review.review_source || null,
+      sourceUrl: review.review_url || null,
+      publishedAt: review.published_at || null,
+    };
+  }
+
+  private dedupeVendorClients(clients: VendorClient[]): VendorClient[] {
+    const seen = new Set<string>();
+    const deduped: VendorClient[] = [];
+
+    for (const client of clients) {
+      const name = String(client.client_name || '').trim();
+      const key = this.normalizeKey(name);
+      if (!key || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      deduped.push(client);
+    }
+
+    return deduped;
+  }
+
+  private dedupeVendorCaseStudies(
+    caseStudies: VendorCaseStudy[],
+  ): VendorCaseStudy[] {
+    const seen = new Set<string>();
+    const deduped: VendorCaseStudy[] = [];
+
+    for (const caseStudy of caseStudies) {
+      const title = String(caseStudy.title || '').trim();
+      const key = this.normalizeKey(title);
+
+      if (!key || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      deduped.push(caseStudy);
+    }
+
+    return deduped;
+  }
+
+  private dedupeVendorReviews(reviews: VendorReview[]): VendorReview[] {
+    const seen = new Set<string>();
+    const deduped: VendorReview[] = [];
+
+    for (const review of reviews) {
+      const reviewerName = String(review.reviewer_name || '').trim();
+      const quote = String(review.review_text || '').trim();
+      const key = `${this.normalizeKey(reviewerName)}::${this.normalizeKey(quote).slice(0, 180)}`;
+
+      if (!reviewerName || !quote || !key || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      deduped.push(review);
+    }
+
+    return deduped;
+  }
+
+  private normalizeKey(value: string): string {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private normalizeListingFilters(
@@ -911,6 +1296,20 @@ export class VendorsService {
 
   private resolveRating(vendor: Vendor): number {
     return Number(vendor.rating_1 || vendor.rating_2 || 0);
+  }
+
+  private toNumber(value: unknown): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private toNullablePositiveNumber(value: unknown): number | null {
+    const parsed = this.toNumber(value);
+    if (parsed <= 0) {
+      return null;
+    }
+
+    return parsed;
   }
 
   private formatStartFrom(minProjectSizeUsd: number): string {

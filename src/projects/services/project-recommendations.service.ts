@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { createHash } from 'crypto';
@@ -36,6 +36,7 @@ interface VendorRecommendationResult {
 
 @Injectable()
 export class ProjectRecommendationsService {
+  private readonly logger = new Logger(ProjectRecommendationsService.name);
   private readonly ACTIVE_VENDOR_STATUSES = ['Prospect', 'Validated', 'Active'];
   private readonly BASE_RECOMMENDATION_LIMIT = 6;
   private readonly OVERFLOW_DISPLAY_SCORE_THRESHOLD = 70;
@@ -58,6 +59,10 @@ export class ProjectRecommendationsService {
   };
 
   private readonly SCORING_VERSION = this.buildScoringVersion();
+  private readonly inFlightComputations = new Map<
+    number,
+    Promise<ProjectRecommendationsResponseDto>
+  >();
 
   constructor(
     @InjectRepository(Project)
@@ -77,6 +82,39 @@ export class ProjectRecommendationsService {
     userId: number,
   ): Promise<ProjectRecommendationsResponseDto> {
     const project = await this.getProjectForUser(projectId, userId);
+    return this.computeAndStoreRecommendationsForProject(project, userId);
+  }
+
+  private computeAndStoreRecommendationsForProject(
+    project: Project,
+    userId: number,
+  ): Promise<ProjectRecommendationsResponseDto> {
+    const existingComputation = this.inFlightComputations.get(project.id);
+    if (existingComputation) {
+      this.logger.debug(
+        `Reusing in-flight recommendation computation for projectId=${project.id}, userId=${userId}`,
+      );
+      return existingComputation;
+    }
+
+    const computationPromise = this.computeAndStoreRecommendationsInternal(
+      project,
+      userId,
+    ).finally(() => {
+      if (this.inFlightComputations.get(project.id) === computationPromise) {
+        this.inFlightComputations.delete(project.id);
+      }
+    });
+
+    this.inFlightComputations.set(project.id, computationPromise);
+    return computationPromise;
+  }
+
+  private async computeAndStoreRecommendationsInternal(
+    project: Project,
+    userId: number,
+  ): Promise<ProjectRecommendationsResponseDto> {
+    const startedAt = Date.now();
     const vendors = await this.vendorsRepository
       .createQueryBuilder('vendor')
       .where('vendor.status IN (:...statuses)', {
@@ -152,7 +190,7 @@ export class ProjectRecommendationsService {
       },
     );
 
-    return {
+    const response = {
       projectId: project.id,
       scoringVersion: this.SCORING_VERSION,
       computedAt,
@@ -171,6 +209,13 @@ export class ProjectRecommendationsService {
         ),
       ),
     };
+
+    const durationMs = Date.now() - startedAt;
+    this.logger.log(
+      `recommendation compute completed projectId=${project.id} userId=${userId} recommendedCount=${response.totalRecommended} durationMs=${durationMs}`,
+    );
+
+    return response;
   }
 
   async getStoredRecommendations(
@@ -187,7 +232,7 @@ export class ProjectRecommendationsService {
       .getOne();
 
     if (!latestStoredMatch) {
-      return this.computeAndStoreRecommendations(projectId, userId);
+      return this.computeAndStoreRecommendationsForProject(project, userId);
     }
 
     if (
@@ -196,12 +241,12 @@ export class ProjectRecommendationsService {
         latestStoredMatch.computed_at,
       )
     ) {
-      await this.computeAndStoreRecommendations(projectId, userId);
+      await this.computeAndStoreRecommendationsForProject(project, userId);
       return this.getStoredRecommendations(projectId, userId, filtersDto);
     }
 
     if (latestStoredMatch.scoring_version !== this.SCORING_VERSION) {
-      await this.computeAndStoreRecommendations(projectId, userId);
+      await this.computeAndStoreRecommendationsForProject(project, userId);
       return this.getStoredRecommendations(projectId, userId, filtersDto);
     }
 
