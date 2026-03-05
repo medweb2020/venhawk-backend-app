@@ -21,6 +21,10 @@ import { VendorSystemsAndProjectCategoriesSync20260303010000 } from './migration
 import { VendorScreenshotSeedAndCategoryLinks20260303023000 } from './migrations/20260303023000-vendor-screenshot-seed-and-category-links';
 import { VendorProfileSourceRefresh20260303050000 } from './migrations/20260303050000-vendor-profile-source-refresh';
 import { VendorDetailContent20260304000000 } from './migrations/20260304000000-vendor-detail-content';
+import { VendorAdditionalContentImport20260305010000 } from './migrations/20260305010000-vendor-additional-content-import';
+import { VendorAdditionalContentImport20260305020000 } from './migrations/20260305020000-vendor-additional-content-import-v2';
+import { VendorAdditionalContentImport20260305030000 } from './migrations/20260305030000-vendor-additional-content-import-v3';
+import { VendorAdditionalContentImport20260305040000 } from './migrations/20260305040000-vendor-additional-content-import-v4';
 
 export const TYPEORM_ENTITIES = [
   User,
@@ -49,6 +53,10 @@ export const TYPEORM_MIGRATIONS = [
   VendorScreenshotSeedAndCategoryLinks20260303023000,
   VendorProfileSourceRefresh20260303050000,
   VendorDetailContent20260304000000,
+  VendorAdditionalContentImport20260305010000,
+  VendorAdditionalContentImport20260305020000,
+  VendorAdditionalContentImport20260305030000,
+  VendorAdditionalContentImport20260305040000,
 ];
 
 export const TYPEORM_MIGRATIONS_TABLE_NAME = 'typeorm_migrations';
