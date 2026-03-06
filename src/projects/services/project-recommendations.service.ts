@@ -21,6 +21,11 @@ import {
   normalizeMatchingText,
   textContainsSystemKeyword,
 } from '../constants/project-matching.constants';
+import {
+  ProjectSystemResolutionService,
+  ProjectSystemResolutionContext,
+  ResolvedProjectSystem,
+} from './project-system-resolution.service';
 
 interface DimensionScore {
   points: number;
@@ -58,7 +63,7 @@ export class ProjectRecommendationsService {
     },
   };
 
-  private readonly SCORING_VERSION = this.buildScoringVersion();
+  private readonly SCORING_VERSION: string;
   private readonly inFlightComputations = new Map<
     number,
     Promise<ProjectRecommendationsResponseDto>
@@ -75,7 +80,10 @@ export class ProjectRecommendationsService {
     private readonly vendorProjectCategoriesRepository: Repository<VendorProjectCategory>,
     private readonly vendorsService: VendorsService,
     private readonly projectRecommendationReasoningService: ProjectRecommendationReasoningService,
-  ) {}
+    private readonly projectSystemResolutionService: ProjectSystemResolutionService,
+  ) {
+    this.SCORING_VERSION = this.buildScoringVersion();
+  }
 
   async computeAndStoreRecommendations(
     projectId: number,
@@ -127,18 +135,35 @@ export class ProjectRecommendationsService {
         project.project_category_id,
         vendors.map((vendor) => vendor.id),
       );
+    const projectSystemResolutionContext =
+      this.buildProjectSystemResolutionContext(
+        vendors,
+        vendorIdsMappedToProjectCategory,
+      );
+    const resolvedProjectSystem =
+      await this.projectSystemResolutionService.resolveProjectSystem(
+        String(project.projectCategory?.value || ''),
+        String(project.system_name || ''),
+        projectSystemResolutionContext,
+      );
 
     const eligibleVendors = vendors.filter((vendor) =>
       this.isVendorEligibleForProject(
         vendor,
         project,
         vendorIdsMappedToProjectCategory,
+        resolvedProjectSystem,
       ),
     );
 
     const ranked = eligibleVendors
       .map((vendor) =>
-        this.scoreVendor(vendor, project, vendorIdsMappedToProjectCategory),
+        this.scoreVendor(
+          vendor,
+          project,
+          vendorIdsMappedToProjectCategory,
+          resolvedProjectSystem,
+        ),
       )
       .filter((result) => result.rawScore > 0)
       .sort((a, b) => {
@@ -162,8 +187,14 @@ export class ProjectRecommendationsService {
     const reasoningByVendorId =
       await this.projectRecommendationReasoningService.generateTopMatchReasons(
         project.id,
-        this.toProjectReasoningInput(project),
-        scored.map((result) => this.toReasoningVendorInput(result, project)),
+        this.toProjectReasoningInput(project, resolvedProjectSystem),
+        scored.map((result) =>
+          this.toReasoningVendorInput(
+            result,
+            project,
+            resolvedProjectSystem,
+          ),
+        ),
       );
 
     const computedAt = new Date();
@@ -335,6 +366,7 @@ export class ProjectRecommendationsService {
     vendor: Vendor,
     project: Project,
     vendorIdsMappedToProjectCategory: Set<number>,
+    resolvedProjectSystem: ResolvedProjectSystem | null,
   ): boolean {
     const projectIndustry = this.resolveProjectIndustryValue(project);
     if (projectIndustry !== LEGAL_CLIENT_INDUSTRY_VALUE) {
@@ -345,12 +377,11 @@ export class ProjectRecommendationsService {
       return false;
     }
 
-    const projectSystemKeyword = this.resolveProjectSystemKeyword(project);
-    if (!projectSystemKeyword) {
+    if (!resolvedProjectSystem || resolvedProjectSystem.searchTerms.length === 0) {
       return false;
     }
 
-    return this.vendorSupportsSystemKeyword(vendor, projectSystemKeyword);
+    return this.vendorSupportsResolvedSystem(vendor, resolvedProjectSystem);
   }
 
   private resolveProjectIndustryValue(project: Project): string {
@@ -359,18 +390,13 @@ export class ProjectRecommendationsService {
       .toLowerCase();
   }
 
-  private resolveProjectSystemKeyword(project: Project): string | null {
-    const normalizedSystemName = normalizeMatchingText(project.system_name);
-    return normalizedSystemName || null;
-  }
-
-  private vendorSupportsSystemKeyword(
+  private vendorSupportsResolvedSystem(
     vendor: Vendor,
-    projectSystemKeyword: string,
+    resolvedProjectSystem: ResolvedProjectSystem,
   ): boolean {
-    return textContainsSystemKeyword(
-      String(vendor.legal_tech_stack || ''),
-      projectSystemKeyword,
+    const vendorSystemText = String(vendor.legal_tech_stack || '');
+    return resolvedProjectSystem.searchTerms.some((searchTerm) =>
+      textContainsSystemKeyword(vendorSystemText, searchTerm),
     );
   }
 
@@ -378,12 +404,13 @@ export class ProjectRecommendationsService {
     vendor: Vendor,
     project: Project,
     vendorIdsMappedToProjectCategory: Set<number>,
+    resolvedProjectSystem: ResolvedProjectSystem | null,
   ): VendorRecommendationResult {
     const capability = this.calculateCapabilityScore(
       vendor,
       vendorIdsMappedToProjectCategory,
     );
-    const system = this.calculateSystemScore(vendor, project);
+    const system = this.calculateSystemScore(vendor, resolvedProjectSystem);
     const pricing = this.calculatePricingScore(vendor, project);
     const timeline = this.calculateTimelineScore(vendor, project);
     const proofReviews = this.calculateProofReviewsScore(vendor);
@@ -436,19 +463,72 @@ export class ProjectRecommendationsService {
     return { points, maxPoints: this.WEIGHTS.CAPABILITY };
   }
 
+  private buildProjectSystemResolutionContext(
+    vendors: Vendor[],
+    vendorIdsMappedToProjectCategory: Set<number>,
+  ): ProjectSystemResolutionContext {
+    const mappedVendors = vendors.filter((vendor) =>
+      vendorIdsMappedToProjectCategory.has(vendor.id),
+    );
+
+    const legalTechStackTerms = this.collectUniqueResolutionTerms(
+      mappedVendors.flatMap((vendor) =>
+        this.parseListValues(
+          [
+            vendor.legal_tech_stack,
+            vendor.platforms_experience,
+            vendor.listing_specialty,
+          ]
+            .filter(Boolean)
+            .join(','),
+        ),
+      ),
+      80,
+    );
+
+    const vendorCategories = this.collectUniqueResolutionTerms(
+      mappedVendors.flatMap((vendor) => [
+        String(vendor.vendor_type || '').trim(),
+        ...this.parseListValues(vendor.service_domains),
+      ]),
+      25,
+    );
+
+    return {
+      legalTechStackTerms,
+      vendorCategories,
+    };
+  }
+
+  private collectUniqueResolutionTerms(
+    values: string[],
+    limit: number,
+  ): string[] {
+    const seen = new Set<string>();
+    const deduplicated: string[] = [];
+
+    values.forEach((value) => {
+      const normalized = normalizeMatchingText(value);
+      if (!normalized || seen.has(normalized)) {
+        return;
+      }
+
+      seen.add(normalized);
+      deduplicated.push(value.trim());
+    });
+
+    return deduplicated.slice(0, limit);
+  }
+
   private calculateSystemScore(
     vendor: Vendor,
-    project: Project,
+    resolvedProjectSystem: ResolvedProjectSystem | null,
   ): DimensionScore {
-    const projectSystemKeyword = this.resolveProjectSystemKeyword(project);
-    if (!projectSystemKeyword) {
+    if (!resolvedProjectSystem || resolvedProjectSystem.searchTerms.length === 0) {
       return { points: 0, maxPoints: this.WEIGHTS.SYSTEM };
     }
 
-    const points = this.vendorSupportsSystemKeyword(
-      vendor,
-      projectSystemKeyword,
-    )
+    const points = this.vendorSupportsResolvedSystem(vendor, resolvedProjectSystem)
       ? this.WEIGHTS.SYSTEM
       : 0;
 
@@ -607,6 +687,7 @@ export class ProjectRecommendationsService {
 
   private toProjectReasoningInput(
     project: Project,
+    resolvedProjectSystem: ResolvedProjectSystem | null,
   ): RecommendationProjectReasoningInput {
     return {
       projectTitle: String(project.project_title || ''),
@@ -616,7 +697,9 @@ export class ProjectRecommendationsService {
       category: String(
         project.projectCategory?.label || project.projectCategory?.value || '',
       ),
-      systemName: String(project.system_name || ''),
+      systemName: String(
+        resolvedProjectSystem?.resolvedLabel || project.system_name || '',
+      ),
       projectObjective: String(project.project_objective || ''),
       businessRequirements: String(project.business_requirements || ''),
       technicalRequirements: String(project.technical_requirements || ''),
@@ -626,6 +709,7 @@ export class ProjectRecommendationsService {
   private toReasoningVendorInput(
     result: VendorRecommendationResult,
     project: Project,
+    resolvedProjectSystem: ResolvedProjectSystem | null,
   ): RecommendationVendorReasoningInput {
     const vendor = result.vendor;
     const ratingSignals = this.extractRatingSignals(vendor);
@@ -640,7 +724,12 @@ export class ProjectRecommendationsService {
       matchingScore: result.displayScore,
       tier: vendor.listing_tier || this.calculateTier(vendor),
       legalFocusLevel: String(vendor.legal_focus_level || 'Some'),
-      specialty: this.buildVendorSpecialty(vendor, project, 3),
+      specialty: this.buildVendorSpecialty(
+        vendor,
+        project,
+        3,
+        resolvedProjectSystem?.resolvedLabel || null,
+      ),
       serviceDomains: this.parseCsvValues(vendor.service_domains, 3),
       legalTechStack: this.parseCsvValues(vendor.legal_tech_stack, 4),
       topStrengths: this.extractTopStrengthLabels(result.breakdown),
@@ -898,8 +987,11 @@ export class ProjectRecommendationsService {
         strictCategoryGate: true,
         categoryMatchSource: 'vendor_project_categories',
         strictSystemGate: true,
-        projectSystemMatchMode: 'first-word',
+        projectSystemMatchMode: 'ai-assisted-resolution',
         vendorSystemField: 'legal_tech_stack',
+        systemResolutionPolicy: JSON.parse(
+          this.projectSystemResolutionService.getPolicyVersion(),
+        ),
       },
       reasoningPolicy: {
         allMatchesHaveReason: true,
@@ -982,6 +1074,7 @@ export class ProjectRecommendationsService {
     vendor: Vendor,
     project: Project,
     maxItems: number,
+    resolvedProjectSystemLabel: string | null = null,
   ): string {
     const specialties = this.extractVendorSpecialtyValues(vendor);
     if (specialties.length === 0) {
@@ -991,6 +1084,7 @@ export class ProjectRecommendationsService {
     const prioritizedSpecialties = this.prioritizeSpecialtiesForProject(
       specialties,
       project,
+      resolvedProjectSystemLabel,
     );
     const visibleSpecialties =
       maxItems > 0
@@ -1037,8 +1131,11 @@ export class ProjectRecommendationsService {
   private prioritizeSpecialtiesForProject(
     specialties: string[],
     project: Project,
+    resolvedProjectSystemLabel: string | null = null,
   ): string[] {
-    const projectSystemText = normalizeMatchingText(project.system_name);
+    const projectSystemText = normalizeMatchingText(
+      resolvedProjectSystemLabel || project.system_name,
+    );
     const projectSystemTokens =
       this.extractProjectSystemTokens(projectSystemText);
 

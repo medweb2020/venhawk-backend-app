@@ -2,9 +2,9 @@ import { textContainsSystemKeyword } from './project-matching.constants';
 
 describe('project matching constants', () => {
   describe('textContainsSystemKeyword', () => {
-    it('preserves existing primary-keyword behavior', () => {
+    it('does not match multi-word phrases by only the first token', () => {
       expect(textContainsSystemKeyword('Power Apps, Azure', 'power bi')).toBe(
-        true,
+        false,
       );
     });
 
@@ -22,6 +22,12 @@ describe('project matching constants', () => {
 
     it('does not match unrelated compact substrings', () => {
       expect(textContainsSystemKeyword('Capital Markets', 'api')).toBe(false);
+    });
+
+    it('still matches single-token keywords exactly', () => {
+      expect(textContainsSystemKeyword('Azure, Power Platform', 'azure')).toBe(
+        true,
+      );
     });
   });
 });

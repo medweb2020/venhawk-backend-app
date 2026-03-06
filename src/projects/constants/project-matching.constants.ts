@@ -45,7 +45,7 @@ export const PROJECT_CATEGORY_ELIGIBILITY_KEYWORDS: Record<string, string[]> = {
   ],
 };
 
-const SYSTEM_ALIASES: Record<string, string[]> = {
+export const SYSTEM_ALIASES: Record<string, string[]> = {
   Intapp: ['intapp'],
   iManage: ['imanage', 'i manage'],
   NetDocuments: ['netdocuments', 'net documents'],
@@ -57,6 +57,12 @@ const SYSTEM_ALIASES: Record<string, string[]> = {
   'Hybrid Cloud': ['hybrid cloud', 'multi cloud'],
   ServiceNow: ['servicenow', 'service now'],
   Workday: ['workday'],
+  'Microsoft Dynamics': [
+    'microsoft dynamics',
+    'microsoft dynamics 365',
+    'dynamics 365',
+    'dynamics365',
+  ],
   'Microsoft 365': [
     'microsoft 365',
     'm365',
@@ -154,6 +160,10 @@ export const textSupportsCanonicalSystem = (
   return aliases.some((alias) => containsAlias(normalizedText, alias));
 };
 
+export const getSystemAliases = (canonicalSystem: string): string[] => {
+  return SYSTEM_ALIASES[canonicalSystem] || [];
+};
+
 export const extractPrimarySystemKeyword = (
   rawSystemName: string,
 ): string | null => {
@@ -171,21 +181,10 @@ export const textContainsSystemKeyword = (
   keyword: string,
 ): boolean => {
   const normalizedText = normalizeMatchingText(text);
-  const primaryKeyword = extractPrimarySystemKeyword(keyword);
   const normalizedKeyword = normalizeMatchingText(keyword);
+  const keywordTokens = normalizedKeyword.split(/\s+/).filter(Boolean);
 
-  if (!normalizedText || (!primaryKeyword && !normalizedKeyword)) {
-    return false;
-  }
-
-  if (primaryKeyword) {
-    const primaryPattern = `\\b${escapeRegex(primaryKeyword)}\\b`;
-    if (new RegExp(primaryPattern, 'i').test(normalizedText)) {
-      return true;
-    }
-  }
-
-  if (!normalizedKeyword) {
+  if (!normalizedText || !normalizedKeyword) {
     return false;
   }
 
@@ -204,6 +203,14 @@ export const textContainsSystemKeyword = (
     return false;
   }
 
-  const compactPattern = `(^|[^a-z0-9])${escapeRegex(compactKeyword)}(?=$|[^a-z0-9])`;
-  return new RegExp(compactPattern, 'i').test(compactText);
+  if (compactKeyword.length >= 4 && compactText.includes(compactKeyword)) {
+    return true;
+  }
+
+  if (keywordTokens.length !== 1) {
+    return false;
+  }
+
+  const singleTokenPattern = `\\b${escapeRegex(keywordTokens[0])}\\b`;
+  return new RegExp(singleTokenPattern, 'i').test(normalizedText);
 };
