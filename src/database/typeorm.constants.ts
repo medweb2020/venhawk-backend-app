@@ -25,6 +25,13 @@ import { VendorAdditionalContentImport20260305010000 } from './migrations/202603
 import { VendorAdditionalContentImport20260305020000 } from './migrations/20260305020000-vendor-additional-content-import-v2';
 import { VendorAdditionalContentImport20260305030000 } from './migrations/20260305030000-vendor-additional-content-import-v3';
 import { VendorAdditionalContentImport20260305040000 } from './migrations/20260305040000-vendor-additional-content-import-v4';
+import { FixBrokenCaseStudyUrls20260306010000 } from './migrations/20260306010000-fix-broken-case-study-urls';
+import { CleanBrokenCaseStudiesAndClientLogos20260306020000 } from './migrations/20260306020000-clean-broken-case-studies-and-client-logos';
+import { RemoveUnresolvedCaseStudies20260306030000 } from './migrations/20260306030000-remove-unresolved-case-studies';
+import { FillRemainingClientLogos20260306040000 } from './migrations/20260306040000-fill-remaining-client-logos';
+import { AddMoreClientWebsitesAndLogos20260306050000 } from './migrations/20260306050000-add-more-client-websites-and-logos';
+import { CompleteMoreClientLogos20260306060000 } from './migrations/20260306060000-complete-more-client-logos';
+import { FillFinalClientLogo20260306070000 } from './migrations/20260306070000-fill-final-client-logo';
 
 export const TYPEORM_ENTITIES = [
   User,
@@ -57,6 +64,13 @@ export const TYPEORM_MIGRATIONS = [
   VendorAdditionalContentImport20260305020000,
   VendorAdditionalContentImport20260305030000,
   VendorAdditionalContentImport20260305040000,
+  FixBrokenCaseStudyUrls20260306010000,
+  CleanBrokenCaseStudiesAndClientLogos20260306020000,
+  RemoveUnresolvedCaseStudies20260306030000,
+  FillRemainingClientLogos20260306040000,
+  AddMoreClientWebsitesAndLogos20260306050000,
+  CompleteMoreClientLogos20260306060000,
+  FillFinalClientLogo20260306070000,
 ];
 
 export const TYPEORM_MIGRATIONS_TABLE_NAME = 'typeorm_migrations';
