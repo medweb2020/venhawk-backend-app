@@ -10,10 +10,13 @@ import { Project } from '../projects/entities/project.entity';
 import { ProjectVendorMatch } from '../projects/entities/project-vendor-match.entity';
 import { ProjectVendorReason } from '../projects/entities/project-vendor-reason.entity';
 import { UsersModule } from '../users/users.module';
+import { SupabaseModule } from '../supabase/supabase.module';
+import { VendorLogoAdminGuard } from './guards/vendor-logo-admin.guard';
 
 @Module({
   imports: [
     UsersModule,
+    SupabaseModule,
     TypeOrmModule.forFeature([
       Vendor,
       VendorClient,
@@ -25,7 +28,7 @@ import { UsersModule } from '../users/users.module';
     ]),
   ],
   controllers: [VendorsController],
-  providers: [VendorsService],
+  providers: [VendorsService, VendorLogoAdminGuard],
   exports: [VendorsService],
 })
 export class VendorsModule {}

@@ -21,6 +21,7 @@
     "migration:show": "npm run typeorm -- migration:show",
     "migration:create": "npm run typeorm -- migration:create src/database/migrations/$npm_config_name",
     "migration:generate": "npm run typeorm -- migration:generate src/database/migrations/$npm_config_name",
+    "logos:sync:local": "ts-node src/scripts/sync-local-logo-assets.ts",
     "db:migrate": "node dist/scripts/run-migrations.js",
     "db:migrate:build": "npm run build && npm run db:migrate",
     "prestart:prod": "npm run db:migrate",

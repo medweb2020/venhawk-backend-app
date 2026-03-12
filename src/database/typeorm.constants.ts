@@ -32,6 +32,8 @@ import { FillRemainingClientLogos20260306040000 } from './migrations/20260306040
 import { AddMoreClientWebsitesAndLogos20260306050000 } from './migrations/20260306050000-add-more-client-websites-and-logos';
 import { CompleteMoreClientLogos20260306060000 } from './migrations/20260306060000-complete-more-client-logos';
 import { FillFinalClientLogo20260306070000 } from './migrations/20260306070000-fill-final-client-logo';
+import { VendorClientExpansion20260311143000 } from './migrations/20260311143000-vendor-client-expansion';
+import { VendorClientTopUpToSeven20260311195000 } from './migrations/20260311195000-vendor-client-top-up-to-seven';
 
 export const TYPEORM_ENTITIES = [
   User,
@@ -71,6 +73,8 @@ export const TYPEORM_MIGRATIONS = [
   AddMoreClientWebsitesAndLogos20260306050000,
   CompleteMoreClientLogos20260306060000,
   FillFinalClientLogo20260306070000,
+  VendorClientExpansion20260311143000,
+  VendorClientTopUpToSeven20260311195000,
 ];
 
 export const TYPEORM_MIGRATIONS_TABLE_NAME = 'typeorm_migrations';

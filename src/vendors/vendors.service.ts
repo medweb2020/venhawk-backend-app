@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
 import { Vendor } from './entities/vendor.entity';
@@ -24,6 +24,13 @@ import { textContainsSystemKeyword } from '../projects/constants/project-matchin
 import { Project } from '../projects/entities/project.entity';
 import { ProjectVendorMatch } from '../projects/entities/project-vendor-match.entity';
 import { ProjectVendorReason } from '../projects/entities/project-vendor-reason.entity';
+import {
+  VendorLogoAdminClientDto,
+  VendorLogoAdminOverviewResponseDto,
+  VendorLogoAdminVendorDetailDto,
+  VendorLogoAdminVendorListItemDto,
+} from './dto/vendor-logo-admin-response.dto';
+import { SupabaseService } from '../supabase/supabase.service';
 
 interface ProjectCriteria {
   projectCategory: string;
@@ -224,6 +231,7 @@ export class VendorsService {
     private projectVendorMatchesRepository: Repository<ProjectVendorMatch>,
     @InjectRepository(ProjectVendorReason)
     private projectVendorReasonsRepository: Repository<ProjectVendorReason>,
+    private readonly supabaseService: SupabaseService,
   ) {}
 
   async getListingFilterOptions(): Promise<VendorListingFilterOptionsResponseDto> {
@@ -327,6 +335,107 @@ export class VendorsService {
       reviews,
       matchReason,
     );
+  }
+
+  async getLogoAdminOverview(): Promise<VendorLogoAdminOverviewResponseDto> {
+    const vendorRows = await this.vendorsRepository
+      .createQueryBuilder('vendor')
+      .select([
+        'vendor.id AS vendor_id',
+        'vendor.vendor_id AS vendor_vendor_id',
+        'vendor.brand_name AS vendor_brand_name',
+        'vendor.logo_url AS vendor_logo_url',
+      ])
+      .orderBy('vendor.brand_name', 'ASC')
+      .getRawMany();
+
+    const vendors: VendorLogoAdminVendorListItemDto[] = vendorRows.map(
+      (row) => ({
+        id: this.toNumber(row.vendor_id),
+        vendorId: String(row.vendor_vendor_id || ''),
+        brandName: String(row.vendor_brand_name || ''),
+        logoUrl: this.toNullableString(row.vendor_logo_url),
+      }),
+    );
+
+    return { vendors };
+  }
+
+  async getLogoAdminVendor(
+    vendorId: string,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    const vendor = await this.getVendorByExternalId(vendorId);
+    return this.buildLogoAdminVendorDetail(vendor);
+  }
+
+  async uploadVendorLogo(
+    vendorId: string,
+    file: Express.Multer.File,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    const vendor = await this.getVendorByExternalId(vendorId);
+    const previousLogoUrl = this.toNullableString(vendor.logo_url);
+    const objectPath = `logos/vendors/${vendor.id}-${this.toSlug(vendor.brand_name)}${this.resolveFileExtension(file)}`;
+    const { fileUrl } = await this.supabaseService.uploadLogoFile(
+      file.buffer,
+      objectPath,
+      file.mimetype,
+    );
+
+    vendor.logo_url = fileUrl;
+    await this.vendorsRepository.save(vendor);
+    await this.deleteManagedLogo(previousLogoUrl, fileUrl);
+
+    return this.buildLogoAdminVendorDetail(vendor);
+  }
+
+  async deleteVendorLogo(
+    vendorId: string,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    const vendor = await this.getVendorByExternalId(vendorId);
+    const previousLogoUrl = this.toNullableString(vendor.logo_url);
+
+    vendor.logo_url = null;
+    await this.vendorsRepository.save(vendor);
+    await this.deleteManagedLogo(previousLogoUrl);
+
+    return this.buildLogoAdminVendorDetail(vendor);
+  }
+
+  async uploadVendorClientLogo(
+    vendorId: string,
+    clientId: number,
+    file: Express.Multer.File,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    const vendor = await this.getVendorByExternalId(vendorId);
+    const client = await this.getVendorClientForAdmin(vendor.id, clientId);
+    const previousLogoUrl = this.toNullableString(client.client_logo_url);
+    const objectPath = `logos/clients/${vendor.id}/${client.id}-${this.toSlug(client.client_name)}${this.resolveFileExtension(file)}`;
+    const { fileUrl } = await this.supabaseService.uploadLogoFile(
+      file.buffer,
+      objectPath,
+      file.mimetype,
+    );
+
+    client.client_logo_url = fileUrl;
+    await this.vendorClientsRepository.save(client);
+    await this.deleteManagedLogo(previousLogoUrl, fileUrl);
+
+    return this.buildLogoAdminVendorDetail(vendor);
+  }
+
+  async deleteVendorClientLogo(
+    vendorId: string,
+    clientId: number,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    const vendor = await this.getVendorByExternalId(vendorId);
+    const client = await this.getVendorClientForAdmin(vendor.id, clientId);
+    const previousLogoUrl = this.toNullableString(client.client_logo_url);
+
+    client.client_logo_url = null;
+    await this.vendorClientsRepository.save(client);
+    await this.deleteManagedLogo(previousLogoUrl);
+
+    return this.buildLogoAdminVendorDetail(vendor);
   }
 
   private async resolveProjectContext(
@@ -1318,5 +1427,133 @@ export class VendorsService {
     }
 
     return `$${(Number(minProjectSizeUsd) / 1000).toFixed(0)}k`;
+  }
+
+  private async buildLogoAdminVendorDetail(
+    vendor: Vendor,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    const clientRows = await this.vendorClientsRepository
+      .createQueryBuilder('client')
+      .select([
+        'client.id AS client_id',
+        'client.client_name AS client_name',
+        'client.client_logo_url AS client_logo_url',
+      ])
+      .where('client.vendor_id = :vendorId', { vendorId: vendor.id })
+      .orderBy('client.display_order', 'ASC')
+      .addOrderBy('client.client_name', 'ASC')
+      .getRawMany();
+
+    const clients: VendorLogoAdminClientDto[] = clientRows.map((row) => ({
+      id: this.toNumber(row.client_id),
+      clientName: String(row.client_name || ''),
+      logoUrl: this.toNullableString(row.client_logo_url),
+    }));
+
+    return {
+      id: vendor.id,
+      vendorId: vendor.vendor_id,
+      brandName: vendor.brand_name,
+      logoUrl: this.toNullableString(vendor.logo_url),
+      clients,
+    };
+  }
+
+  private async getVendorByExternalId(vendorId: string): Promise<Vendor> {
+    const normalizedVendorId = String(vendorId || '').trim();
+    if (!normalizedVendorId) {
+      throw new BadRequestException('Vendor ID is required.');
+    }
+
+    const vendor = await this.vendorsRepository.findOne({
+      where: {
+        vendor_id: normalizedVendorId,
+      },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException('Vendor not found.');
+    }
+
+    return vendor;
+  }
+
+  private async getVendorClientForAdmin(
+    vendorId: number,
+    clientId: number,
+  ): Promise<VendorClient> {
+    if (!Number.isInteger(clientId) || clientId <= 0) {
+      throw new BadRequestException('Client ID is invalid.');
+    }
+
+    const client = await this.vendorClientsRepository.findOne({
+      where: {
+        id: clientId,
+        vendor_id: vendorId,
+      },
+    });
+
+    if (!client) {
+      throw new NotFoundException('Vendor client not found.');
+    }
+
+    return client;
+  }
+
+  private async deleteManagedLogo(
+    previousUrl: string | null,
+    replacementUrl?: string,
+  ): Promise<void> {
+    if (!previousUrl || previousUrl === replacementUrl) {
+      return;
+    }
+
+    if (!this.isSupabasePublicUrl(previousUrl)) {
+      return;
+    }
+
+    await this.supabaseService.deleteFileByUrl(previousUrl);
+  }
+
+  private isSupabasePublicUrl(value: string): boolean {
+    return String(value || '').includes('/storage/v1/object/public/');
+  }
+
+  private resolveFileExtension(file: Express.Multer.File): string {
+    const originalExtension = String(file.originalname || '')
+      .trim()
+      .toLowerCase()
+      .match(/\.[a-z0-9]+$/)?.[0];
+
+    if (originalExtension) {
+      return originalExtension;
+    }
+
+    const mimeExtensionMap: Record<string, string> = {
+      'image/png': '.png',
+      'image/jpeg': '.jpg',
+      'image/jpg': '.jpg',
+      'image/webp': '.webp',
+      'image/svg+xml': '.svg',
+      'image/x-icon': '.ico',
+      'image/vnd.microsoft.icon': '.ico',
+    };
+
+    return mimeExtensionMap[file.mimetype] || '.png';
+  }
+
+  private toSlug(value: string): string {
+    return this.normalizeForDedup(value)
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  private toNullableString(value: unknown): string | null {
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    const normalizedValue = String(value).trim();
+    return normalizedValue ? normalizedValue : null;
   }
 }

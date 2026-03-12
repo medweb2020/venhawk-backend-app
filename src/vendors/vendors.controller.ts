@@ -1,12 +1,20 @@
 import {
+  BadRequestException,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   NotFoundException,
   Param,
+  Post,
   Query,
   Request,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { VendorListingResponseDto } from './dto/vendor-listing-response.dto';
 import { VendorListingFiltersDto } from './dto/vendor-listing-filters.dto';
@@ -14,6 +22,11 @@ import { VendorListingFilterOptionsResponseDto } from './dto/vendor-listing-filt
 import { VendorsService } from './vendors.service';
 import { UsersService } from '../users/users.service';
 import { VendorDetailResponseDto } from './dto/vendor-detail-response.dto';
+import {
+  VendorLogoAdminOverviewResponseDto,
+  VendorLogoAdminVendorDetailDto,
+} from './dto/vendor-logo-admin-response.dto';
+import { VendorLogoAdminGuard } from './guards/vendor-logo-admin.guard';
 
 @Controller('api/vendors')
 @UseGuards(JwtAuthGuard)
@@ -40,6 +53,75 @@ export class VendorsController {
     @Param('vendorId') vendorId: string,
   ): Promise<VendorListingResponseDto> {
     return this.vendorsService.getListingVendorById(vendorId);
+  }
+
+  @Get('logo-admin')
+  @UseGuards(VendorLogoAdminGuard)
+  async getLogoAdminOverview(): Promise<VendorLogoAdminOverviewResponseDto> {
+    return this.vendorsService.getLogoAdminOverview();
+  }
+
+  @Get('logo-admin/vendors/:vendorId')
+  @UseGuards(VendorLogoAdminGuard)
+  async getLogoAdminVendor(
+    @Param('vendorId') vendorId: string,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    return this.vendorsService.getLogoAdminVendor(vendorId);
+  }
+
+  @Post('logo-admin/vendors/:vendorId/logo')
+  @UseGuards(VendorLogoAdminGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadVendorLogo(
+    @Param('vendorId') vendorId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    if (!file) {
+      throw new BadRequestException('No file provided');
+    }
+
+    return this.vendorsService.uploadVendorLogo(vendorId, file);
+  }
+
+  @Delete('logo-admin/vendors/:vendorId/logo')
+  @UseGuards(VendorLogoAdminGuard)
+  @HttpCode(HttpStatus.OK)
+  async deleteVendorLogo(
+    @Param('vendorId') vendorId: string,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    return this.vendorsService.deleteVendorLogo(vendorId);
+  }
+
+  @Post('logo-admin/vendors/:vendorId/clients/:clientId/logo')
+  @UseGuards(VendorLogoAdminGuard)
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadVendorClientLogo(
+    @Param('vendorId') vendorId: string,
+    @Param('clientId') clientId: string,
+    @UploadedFile() file: Express.Multer.File,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    if (!file) {
+      throw new BadRequestException('No file provided');
+    }
+
+    return this.vendorsService.uploadVendorClientLogo(
+      vendorId,
+      Number(clientId),
+      file,
+    );
+  }
+
+  @Delete('logo-admin/vendors/:vendorId/clients/:clientId/logo')
+  @UseGuards(VendorLogoAdminGuard)
+  @HttpCode(HttpStatus.OK)
+  async deleteVendorClientLogo(
+    @Param('vendorId') vendorId: string,
+    @Param('clientId') clientId: string,
+  ): Promise<VendorLogoAdminVendorDetailDto> {
+    return this.vendorsService.deleteVendorClientLogo(
+      vendorId,
+      Number(clientId),
+    );
   }
 
   @Get(':vendorId/detail')
