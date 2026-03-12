@@ -34,6 +34,10 @@ import { CompleteMoreClientLogos20260306060000 } from './migrations/202603060600
 import { FillFinalClientLogo20260306070000 } from './migrations/20260306070000-fill-final-client-logo';
 import { VendorClientExpansion20260311143000 } from './migrations/20260311143000-vendor-client-expansion';
 import { VendorClientTopUpToSeven20260311195000 } from './migrations/20260311195000-vendor-client-top-up-to-seven';
+import { RefreshWeakCaseStudySummaries20260312161000 } from './migrations/20260312161000-refresh-weak-case-study-summaries';
+import { VendorCaseStudyExpansion20260312213000 } from './migrations/20260312213000-vendor-case-study-expansion';
+import { NormalizeCaseStudyContent20260313100000 } from './migrations/20260313100000-normalize-case-study-content';
+import { VendorCaseStudyUserSourceAdditions20260313113000 } from './migrations/20260313113000-vendor-case-study-user-source-additions';
 
 export const TYPEORM_ENTITIES = [
   User,
@@ -75,6 +79,10 @@ export const TYPEORM_MIGRATIONS = [
   FillFinalClientLogo20260306070000,
   VendorClientExpansion20260311143000,
   VendorClientTopUpToSeven20260311195000,
+  RefreshWeakCaseStudySummaries20260312161000,
+  VendorCaseStudyExpansion20260312213000,
+  NormalizeCaseStudyContent20260313100000,
+  VendorCaseStudyUserSourceAdditions20260313113000,
 ];
 
 export const TYPEORM_MIGRATIONS_TABLE_NAME = 'typeorm_migrations';
