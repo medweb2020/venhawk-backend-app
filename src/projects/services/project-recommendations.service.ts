@@ -786,7 +786,7 @@ export class ProjectRecommendationsService {
     }
 
     const sourceRaw = scoreBreakdown['matchingReasonSource'];
-    const source = sourceRaw === 'openai' ? 'openai' : 'fallback';
+    const source = sourceRaw === 'claude' ? 'claude' : 'fallback';
 
     return {
       text: reasonRaw.trim(),
@@ -995,7 +995,7 @@ export class ProjectRecommendationsService {
       },
       reasoningPolicy: {
         allMatchesHaveReason: true,
-        openAiTopMatchLimit: 3,
+        aiTopMatchLimit: 3,
         minSentences: 2,
         maxSentences: 2,
       },

@@ -32,7 +32,7 @@ export class VendorDetailReviewDto {
 
 export class VendorDetailResponseDto extends VendorListingResponseDto {
   matchingReason?: string;
-  matchingReasonSource?: 'openai' | 'fallback';
+  matchingReasonSource?: 'claude' | 'fallback';
   keyClients: VendorDetailClientDto[];
   caseStudies: VendorDetailCaseStudyDto[];
   reviews: VendorDetailReviewDto[];

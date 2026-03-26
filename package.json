@@ -34,6 +34,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.80.0",
     "@nestjs/cli": "^10.0.0",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^4.0.2",
@@ -46,7 +47,6 @@
     "class-validator": "^0.14.3",
     "jwks-rsa": "^3.2.2",
     "mysql2": "^3.16.1",
-    "openai": "^5.23.2",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.1.13",

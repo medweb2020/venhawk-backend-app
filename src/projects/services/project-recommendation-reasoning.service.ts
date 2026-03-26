@@ -1,12 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'crypto';
 import { In, Repository } from 'typeorm';
 import { ProjectVendorReason } from '../entities/project-vendor-reason.entity';
 
-export type MatchReasonSource = 'openai' | 'fallback';
+export type MatchReasonSource = 'claude' | 'fallback';
 
 export interface MatchReason {
   text: string;
@@ -52,11 +52,11 @@ export class ProjectRecommendationReasoningService {
     ProjectRecommendationReasoningService.name,
   );
   private readonly model: string;
-  private readonly openAiReasoningLimit = 3;
+  private readonly aiReasoningLimit = 3;
   private readonly minReasonSentences = 2;
   private readonly maxReasonSentences = 2;
   private readonly maxReasonChars = 260;
-  private readonly openAiClient: OpenAI | null;
+  private readonly anthropicClient: Anthropic | null;
 
   constructor(
     private readonly configService: ConfigService,
@@ -64,28 +64,28 @@ export class ProjectRecommendationReasoningService {
     private readonly projectVendorReasonRepository: Repository<ProjectVendorReason>,
   ) {
     const apiKey = String(
-      this.configService.get<string>('OPENAI_API_KEY') || '',
+      this.configService.get<string>('Anthropic_API_Key') || '',
     ).trim();
     const timeoutMs = this.parseTimeoutMs(
-      this.configService.get<string>('OPENAI_RECOMMENDATIONS_TIMEOUT_MS'),
+      this.configService.get<string>('ANTHROPIC_RECOMMENDATIONS_TIMEOUT_MS'),
     );
 
     this.model = String(
-      this.configService.get<string>('OPENAI_RECOMMENDATIONS_MODEL') ||
-        'gpt-4.1-mini',
+      this.configService.get<string>('ANTHROPIC_RECOMMENDATIONS_MODEL') ||
+        'claude-sonnet-4-20250514',
     ).trim();
 
-    this.openAiClient = apiKey
-      ? new OpenAI({
+    this.anthropicClient = apiKey
+      ? new Anthropic({
           apiKey,
           timeout: timeoutMs,
           maxRetries: 1,
         })
       : null;
 
-    if (!this.openAiClient) {
+    if (!this.anthropicClient) {
       this.logger.warn(
-        'OPENAI_API_KEY is missing. Recommendation reasoning will use fallback copy.',
+        'Anthropic_API_Key is missing. Recommendation reasoning will use fallback copy.',
       );
     }
   }
@@ -99,21 +99,21 @@ export class ProjectRecommendationReasoningService {
       return new Map();
     }
 
-    const openAiCandidates = candidates.slice(0, this.openAiReasoningLimit);
+    const aiCandidates = candidates.slice(0, this.aiReasoningLimit);
     const fallbackReasons = this.buildFallbackReasonMap(project, candidates);
     const resolvedReasons = new Map<number, MatchReason>(fallbackReasons);
-    if (openAiCandidates.length === 0) {
+    if (aiCandidates.length === 0) {
       return resolvedReasons;
     }
 
     const contextHashByVendorId = new Map<number, string>(
-      openAiCandidates.map((candidate) => [
+      aiCandidates.map((candidate) => [
         candidate.vendorId,
         this.computeReasonContextHash(project, candidate),
       ]),
     );
 
-    const vendorIds = openAiCandidates.map((candidate) => candidate.vendorId);
+    const vendorIds = aiCandidates.map((candidate) => candidate.vendorId);
     const cachedReasons = await this.projectVendorReasonRepository.find({
       where: {
         project_id: projectId,
@@ -127,7 +127,7 @@ export class ProjectRecommendationReasoningService {
 
     const missingCandidates: RecommendationVendorReasoningInput[] = [];
 
-    for (const candidate of openAiCandidates) {
+    for (const candidate of aiCandidates) {
       const cached = cachedByVendorId.get(candidate.vendorId);
       const expectedHash = contextHashByVendorId.get(candidate.vendorId) || '';
 
@@ -144,11 +144,11 @@ export class ProjectRecommendationReasoningService {
 
       resolvedReasons.set(candidate.vendorId, {
         text: cachedText,
-        source: cached.reason_source === 'openai' ? 'openai' : 'fallback',
+        source: cached.reason_source === 'claude' ? 'claude' : 'fallback',
       });
     }
 
-    const generatedReasons = await this.generateOpenAiReasons(
+    const generatedReasons = await this.generateAiReasons(
       projectId,
       project,
       missingCandidates,
@@ -161,7 +161,7 @@ export class ProjectRecommendationReasoningService {
       const fallbackReason = fallbackReasons.get(candidate.vendorId);
 
       const resolvedReason = generatedText
-        ? { text: generatedText, source: 'openai' as const }
+        ? { text: generatedText, source: 'claude' as const }
         : fallbackReason || {
             text: this.buildFallbackReason(project, candidate),
             source: 'fallback' as const,
@@ -198,27 +198,23 @@ export class ProjectRecommendationReasoningService {
     return resolvedReasons;
   }
 
-  private async generateOpenAiReasons(
+  private async generateAiReasons(
     projectId: number,
     project: RecommendationProjectReasoningInput,
     candidates: RecommendationVendorReasoningInput[],
   ): Promise<Map<number, string>> {
-    if (!this.openAiClient || candidates.length === 0) {
+    if (!this.anthropicClient || candidates.length === 0) {
       return new Map();
     }
 
     const startedAt = Date.now();
     try {
-      const completion = await this.openAiClient.chat.completions.create({
+      const message = await this.anthropicClient.messages.create({
         model: this.model,
-        temperature: 0.1,
-        max_tokens: 220,
+        max_tokens: 2048,
+        system:
+          'You are Venhawk, a B2B vendor matching assistant. Generate focused match explanations for vendor recommendations. Return strict JSON only with shape {"reasons":[{"vendorId":123,"reason":"..."}]}. Each reason must be exactly 2 short sentences, mention concrete system/category fit, reference legal industry relevance, and avoid marketing fluff, repetition, formulas, or internal scoring math.',
         messages: [
-          {
-            role: 'system',
-            content:
-              'You are Venhawk, a B2B vendor matching assistant. Generate focused match explanations for vendor recommendations. Return strict JSON only with shape {"reasons":[{"vendorId":123,"reason":"..."}]}. Each reason must be exactly 2 short sentences, mention concrete system/category fit, reference legal industry relevance, and avoid marketing fluff, repetition, formulas, or internal scoring math.',
-          },
           {
             role: 'user',
             content: JSON.stringify(
@@ -241,15 +237,16 @@ export class ProjectRecommendationReasoningService {
         ],
       });
 
-      const rawContent = completion.choices?.[0]?.message?.content || '';
+      const rawContent =
+        message.content[0]?.type === 'text' ? message.content[0].text : '';
       const parsedReasons = this.parseModelReasonResponse(rawContent, candidates);
       this.logger.log(
-        `openai reasoning completed projectId=${projectId} requestedCount=${candidates.length} generatedCount=${parsedReasons.size} durationMs=${Date.now() - startedAt}`,
+        `claude reasoning completed projectId=${projectId} requestedCount=${candidates.length} generatedCount=${parsedReasons.size} durationMs=${Date.now() - startedAt}`,
       );
       return parsedReasons;
     } catch (error) {
       this.logger.warn(
-        `OpenAI reasoning generation failed for projectId=${projectId} projectTitle="${project.projectTitle}" durationMs=${Date.now() - startedAt}: ${this.getErrorMessage(
+        `Claude reasoning generation failed for projectId=${projectId} projectTitle="${project.projectTitle}" durationMs=${Date.now() - startedAt}: ${this.getErrorMessage(
           error,
         )}`,
       );

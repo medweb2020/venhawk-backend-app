@@ -1,13 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'crypto';
 import {
   getAllowedSystemsForCategory,
   normalizeMatchingText,
 } from '../constants/project-matching.constants';
 
-type ProjectSystemResolutionSource = 'exact' | 'openai' | 'fallback';
+type ProjectSystemResolutionSource = 'exact' | 'claude' | 'fallback';
 
 interface ProjectSystemResolutionResponse {
   resolvedLabel?: string | null;
@@ -31,7 +31,7 @@ export interface ResolvedProjectSystem {
 @Injectable()
 export class ProjectSystemResolutionService {
   private readonly logger = new Logger(ProjectSystemResolutionService.name);
-  private readonly openAiClient: OpenAI | null;
+  private readonly anthropicClient: Anthropic | null;
   private readonly model: string;
   private readonly promptVersion = 'project-system-resolution-v1';
   private readonly resolutionCache = new Map<string, ResolvedProjectSystem | null>();
@@ -80,20 +80,20 @@ export class ProjectSystemResolutionService {
 
   constructor(private readonly configService: ConfigService) {
     const apiKey = String(
-      this.configService.get<string>('OPENAI_API_KEY') || '',
+      this.configService.get<string>('Anthropic_API_Key') || '',
     ).trim();
     const timeoutMs = this.parseTimeoutMs(
-      this.configService.get<string>('OPENAI_RECOMMENDATIONS_TIMEOUT_MS'),
+      this.configService.get<string>('ANTHROPIC_RECOMMENDATIONS_TIMEOUT_MS'),
     );
 
     this.model = String(
-      this.configService.get<string>('OPENAI_SYSTEM_RESOLUTION_MODEL') ||
-        this.configService.get<string>('OPENAI_RECOMMENDATIONS_MODEL') ||
-        'gpt-4.1-mini',
+      this.configService.get<string>('ANTHROPIC_SYSTEM_RESOLUTION_MODEL') ||
+        this.configService.get<string>('ANTHROPIC_RECOMMENDATIONS_MODEL') ||
+        'claude-sonnet-4-20250514',
     ).trim();
 
-    this.openAiClient = apiKey
-      ? new OpenAI({
+    this.anthropicClient = apiKey
+      ? new Anthropic({
           apiKey,
           timeout: timeoutMs,
           maxRetries: 1,
@@ -105,7 +105,7 @@ export class ProjectSystemResolutionService {
     return JSON.stringify({
       promptVersion: this.promptVersion,
       model: this.model,
-      openAiEnabled: Boolean(this.openAiClient),
+      anthropicEnabled: Boolean(this.anthropicClient),
       fallbackPatternCount: this.leadingNoisePatterns.length,
     });
   }
@@ -161,7 +161,7 @@ export class ProjectSystemResolutionService {
       return deterministicResolution;
     }
 
-    const aiResolution = await this.resolveWithOpenAi(
+    const aiResolution = await this.resolveWithAnthropic(
       projectCategory,
       rawInput,
       allowedSystems,
@@ -215,27 +215,23 @@ export class ProjectSystemResolutionService {
     );
   }
 
-  private async resolveWithOpenAi(
+  private async resolveWithAnthropic(
     projectCategory: string,
     rawInput: string,
     allowedSystems: string[],
     context: ProjectSystemResolutionContext,
   ): Promise<ResolvedProjectSystem | null> {
-    if (!this.openAiClient) {
+    if (!this.anthropicClient) {
       return null;
     }
 
     try {
-      const completion = await this.openAiClient.chat.completions.create({
+      const message = await this.anthropicClient.messages.create({
         model: this.model,
-        temperature: 0,
-        max_tokens: 180,
+        max_tokens: 1024,
+        system:
+          'You extract the software or platform name from buyer intake text. Return strict JSON only with shape {"resolvedLabel":"...","matchedAllowedSystem":"...","searchTerms":["..."]}. resolvedLabel must be a concise product/platform name, not the full sentence. matchedAllowedSystem must be null or one of the allowed systems provided. searchTerms must contain 1 to 4 short phrases that may appear in vendor capability text.',
         messages: [
-          {
-            role: 'system',
-            content:
-              'You extract the software or platform name from buyer intake text. Return strict JSON only with shape {"resolvedLabel":"...","matchedAllowedSystem":"...","searchTerms":["..."]}. resolvedLabel must be a concise product/platform name, not the full sentence. matchedAllowedSystem must be null or one of the allowed systems provided. searchTerms must contain 1 to 4 short phrases that may appear in vendor capability text.',
-          },
           {
             role: 'user',
             content: JSON.stringify({
@@ -252,7 +248,8 @@ export class ProjectSystemResolutionService {
         ],
       });
 
-      const rawResponse = completion.choices?.[0]?.message?.content || '';
+      const rawResponse =
+        message.content[0]?.type === 'text' ? message.content[0].text : '';
       const parsed = this.parseModelResponse(rawResponse);
       if (!parsed) {
         return null;
@@ -275,12 +272,12 @@ export class ProjectSystemResolutionService {
         rawInput,
         resolvedLabel,
         matchedAllowedSystem,
-        'openai',
+        'claude',
         Array.isArray(parsed.searchTerms) ? parsed.searchTerms : [],
       );
     } catch (error) {
       this.logger.warn(
-        `OpenAI system resolution failed for projectCategory="${projectCategory}" rawSystem="${rawInput}": ${this.getErrorMessage(
+        `Anthropic system resolution failed for projectCategory="${projectCategory}" rawSystem="${rawInput}": ${this.getErrorMessage(
           error,
         )}`,
       );

@@ -18,5 +18,5 @@ export class VendorResponseDto {
   scoringVersion?: string;
   scoreBreakdown?: Record<string, unknown>;
   matchingReason?: string;
-  matchingReasonSource?: 'openai' | 'fallback';
+  matchingReasonSource?: 'claude' | 'fallback';
 }

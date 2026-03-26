@@ -37,7 +37,7 @@ export class ProjectVendorReason {
   reason_text: string;
 
   @Column({ type: 'varchar', length: 16, default: 'fallback' })
-  reason_source: 'openai' | 'fallback';
+  reason_source: 'claude' | 'fallback';
 
   @Column({ type: 'char', length: 40 })
   context_hash: string;

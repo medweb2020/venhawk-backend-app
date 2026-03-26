@@ -448,7 +448,7 @@ export class VendorsService {
   private async resolveProjectMatchReason(
     vendorId: number,
     projectId: number | null,
-  ): Promise<{ text: string; source: 'openai' | 'fallback' } | null> {
+  ): Promise<{ text: string; source: 'claude' | 'fallback' } | null> {
     if (!projectId) {
       return null;
     }
@@ -478,13 +478,13 @@ export class VendorsService {
 
     return {
       text: String(cachedReason.reason_text).trim(),
-      source: cachedReason.reason_source === 'openai' ? 'openai' : 'fallback',
+      source: cachedReason.reason_source === 'claude' ? 'claude' : 'fallback',
     };
   }
 
   private extractMatchReasonFromBreakdown(
     scoreBreakdown: Record<string, unknown> | null | undefined,
-  ): { text: string; source: 'openai' | 'fallback' } | null {
+  ): { text: string; source: 'claude' | 'fallback' } | null {
     if (!scoreBreakdown || typeof scoreBreakdown !== 'object') {
       return null;
     }
@@ -495,8 +495,8 @@ export class VendorsService {
     }
 
     const source =
-      scoreBreakdown['matchingReasonSource'] === 'openai'
-        ? 'openai'
+      scoreBreakdown['matchingReasonSource'] === 'claude'
+        ? 'claude'
         : 'fallback';
 
     return {
@@ -510,7 +510,7 @@ export class VendorsService {
     clients: VendorClient[],
     caseStudies: VendorCaseStudy[],
     reviews: VendorReview[],
-    matchReason: { text: string; source: 'openai' | 'fallback' } | null,
+    matchReason: { text: string; source: 'claude' | 'fallback' } | null,
   ): VendorDetailResponseDto {
     const listingDto = this.transformToListingResponseDto(vendor);
     const detailClients = this.dedupeVendorClients(clients);
