@@ -14,7 +14,6 @@ import { ProjectVendorReason } from './entities/project-vendor-reason.entity';
 import { VendorProjectCategory } from './entities/vendor-project-category.entity';
 import { ProjectRecommendationsService } from './services/project-recommendations.service';
 import { ProjectRecommendationReasoningService } from './services/project-recommendation-reasoning.service';
-import { ProjectSystemResolutionService } from './services/project-system-resolution.service';
 
 @Module({
   imports: [
@@ -36,7 +35,6 @@ import { ProjectSystemResolutionService } from './services/project-system-resolu
     ProjectsService,
     ProjectRecommendationsService,
     ProjectRecommendationReasoningService,
-    ProjectSystemResolutionService,
   ],
   exports: [ProjectsService],
 })

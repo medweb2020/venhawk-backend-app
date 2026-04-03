@@ -2,9 +2,10 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { createHash } from 'crypto';
+import Anthropic from '@anthropic-ai/sdk';
+import { ConfigService } from '@nestjs/config';
 import { Project } from '../entities/project.entity';
 import { ProjectVendorMatch } from '../entities/project-vendor-match.entity';
-import { VendorProjectCategory } from '../entities/vendor-project-category.entity';
 import { Vendor } from '../../vendors/entities/vendor.entity';
 import { VendorResponseDto } from '../../vendors/dto/vendor-response.dto';
 import { ProjectRecommendationsResponseDto } from '../dto/project-recommendations-response.dto';
@@ -21,11 +22,7 @@ import {
   normalizeMatchingText,
   textContainsSystemKeyword,
 } from '../constants/project-matching.constants';
-import {
-  ProjectSystemResolutionService,
-  ProjectSystemResolutionContext,
-  ResolvedProjectSystem,
-} from './project-system-resolution.service';
+import { ResolvedProjectSystem } from './project-system-resolution.service';
 
 interface DimensionScore {
   points: number;
@@ -68,6 +65,8 @@ export class ProjectRecommendationsService {
     number,
     Promise<ProjectRecommendationsResponseDto>
   >();
+  private readonly anthropicClient: Anthropic | null;
+  private readonly extractionModel: string;
 
   constructor(
     @InjectRepository(Project)
@@ -76,12 +75,17 @@ export class ProjectRecommendationsService {
     private readonly vendorsRepository: Repository<Vendor>,
     @InjectRepository(ProjectVendorMatch)
     private readonly projectVendorMatchesRepository: Repository<ProjectVendorMatch>,
-    @InjectRepository(VendorProjectCategory)
-    private readonly vendorProjectCategoriesRepository: Repository<VendorProjectCategory>,
     private readonly vendorsService: VendorsService,
     private readonly projectRecommendationReasoningService: ProjectRecommendationReasoningService,
-    private readonly projectSystemResolutionService: ProjectSystemResolutionService,
+    private readonly configService: ConfigService,
   ) {
+    const apiKey = String(this.configService.get<string>('Anthropic_API_Key') || '').trim();
+    this.extractionModel = String(
+      this.configService.get<string>('ANTHROPIC_RECOMMENDATIONS_MODEL') || 'claude-sonnet-4-20250514',
+    ).trim();
+    this.anthropicClient = apiKey
+      ? new Anthropic({ apiKey, timeout: 8_000, maxRetries: 1 })
+      : null;
     this.SCORING_VERSION = this.buildScoringVersion();
   }
 
@@ -123,40 +127,52 @@ export class ProjectRecommendationsService {
     userId: number,
   ): Promise<ProjectRecommendationsResponseDto> {
     const startedAt = Date.now();
-    const vendors = await this.vendorsRepository
-      .createQueryBuilder('vendor')
-      .where('vendor.status IN (:...statuses)', {
-        statuses: this.ACTIVE_VENDOR_STATUSES,
-      })
-      .getMany();
 
-    const vendorIdsMappedToProjectCategory =
-      await this.getVendorIdsMappedToProjectCategory(
-        project.project_category_id,
-        vendors.map((vendor) => vendor.id),
-      );
-    const projectSystemResolutionContext =
-      this.buildProjectSystemResolutionContext(
-        vendors,
-        vendorIdsMappedToProjectCategory,
-      );
-    const resolvedProjectSystem =
-      await this.projectSystemResolutionService.resolveProjectSystem(
-        String(project.projectCategory?.value || ''),
-        String(project.system_name || ''),
-        projectSystemResolutionContext,
-      );
-
-    const eligibleVendors = vendors.filter((vendor) =>
-      this.isVendorEligibleForProject(
-        vendor,
-        project,
-        vendorIdsMappedToProjectCategory,
-        resolvedProjectSystem,
-      ),
+    // 1. Extract the core product keyword(s) from the user's system name
+    const keywords = await this.extractSystemKeywords(
+      String(project.system_name || ''),
     );
 
-    const ranked = eligibleVendors
+    // 2. Fetch vendors via DB — system-keyword ILIKE match, category-gated
+    let vendors: Vendor[] = [];
+    let noExactMatch = false;
+
+    if (keywords.length > 0 && project.project_category_id) {
+      vendors = await this.fetchVendorsBySystemKeywords(
+        keywords,
+        project.project_category_id,
+      );
+    }
+
+    // 3. Category-only fallback if no system matches found
+    if (vendors.length === 0) {
+      if (keywords.length > 0) {
+        noExactMatch = true;
+        this.logger.warn(
+          `No vendors matched system keywords ${JSON.stringify(keywords)} for projectId=${project.id} — falling back to category-only ranking`,
+        );
+      }
+      if (project.project_category_id) {
+        vendors = await this.fetchVendorsByCategory(project.project_category_id);
+      }
+    }
+
+    // All DB-returned vendors are already category-filtered — build the set from them
+    const vendorIdsMappedToProjectCategory = new Set(vendors.map((v) => v.id));
+
+    // Synthetic ResolvedProjectSystem from keywords for scoring + reasoning
+    const resolvedProjectSystem: ResolvedProjectSystem | null =
+      !noExactMatch && keywords.length > 0
+        ? {
+            rawInput: String(project.system_name || ''),
+            resolvedLabel: keywords[0],
+            matchedAllowedSystem: null,
+            searchTerms: keywords,
+            source: 'claude',
+          }
+        : null;
+
+    const ranked = vendors
       .map((vendor) =>
         this.scoreVendor(
           vendor,
@@ -167,10 +183,7 @@ export class ProjectRecommendationsService {
       )
       .filter((result) => result.rawScore > 0)
       .sort((a, b) => {
-        if (b.rawScore !== a.rawScore) {
-          return b.rawScore - a.rawScore;
-        }
-
+        if (b.rawScore !== a.rawScore) return b.rawScore - a.rawScore;
         return String(a.vendor.brand_name || '').localeCompare(
           String(b.vendor.brand_name || ''),
         );
@@ -183,48 +196,14 @@ export class ProjectRecommendationsService {
         (result) =>
           Number(result.displayScore) > this.OVERFLOW_DISPLAY_SCORE_THRESHOLD,
       );
-    let scored = [...primary, ...overflow];
-    let noExactMatch = false;
+    const scored = [...primary, ...overflow];
 
-    // Fallback: if system-term matching produced 0 results, return top
-    // category-matched vendors ranked by capability + proof scores so the
-    // user never sees an empty page.
-    if (scored.length === 0) {
-      noExactMatch = true;
-      this.logger.warn(
-        `No vendors matched system terms for projectId=${project.id} — falling back to category-only ranking`,
-      );
-      const fallbackRanked = vendors
-        .filter((vendor) =>
-          this.isVendorEligibleForProject(
-            vendor,
-            project,
-            vendorIdsMappedToProjectCategory,
-            null,
-          ),
-        )
-        .map((vendor) =>
-          this.scoreVendor(
-            vendor,
-            project,
-            vendorIdsMappedToProjectCategory,
-            null,
-          ),
-        )
-        .filter((result) => result.rawScore > 0)
-        .sort((a, b) => b.rawScore - a.rawScore);
-      scored = fallbackRanked.slice(0, this.BASE_RECOMMENDATION_LIMIT);
-    }
     const reasoningByVendorId =
       await this.projectRecommendationReasoningService.generateTopMatchReasons(
         project.id,
         this.toProjectReasoningInput(project, resolvedProjectSystem),
         scored.map((result) =>
-          this.toReasoningVendorInput(
-            result,
-            project,
-            resolvedProjectSystem,
-          ),
+          this.toReasoningVendorInput(result, project, resolvedProjectSystem),
         ),
       );
 
@@ -374,54 +353,106 @@ export class ProjectRecommendationsService {
     return project;
   }
 
-  private async getVendorIdsMappedToProjectCategory(
-    projectCategoryId: number,
-    vendorIds: number[],
-  ): Promise<Set<number>> {
-    if (!projectCategoryId || vendorIds.length === 0) {
-      return new Set<number>();
+  private async extractSystemKeywords(input: string): Promise<string[]> {
+    const trimmed = String(input || '').trim();
+    if (!trimmed) return [];
+
+    const words = trimmed.split(/\s+/);
+    // Short input is very likely already a clean product name
+    if (words.length <= 2) {
+      return [trimmed];
     }
 
-    const rows = await this.vendorProjectCategoriesRepository
-      .createQueryBuilder('vpc')
-      .select('vpc.vendor_id', 'vendor_id')
-      .where('vpc.project_category_id = :projectCategoryId', {
-        projectCategoryId,
+    if (!this.anthropicClient) {
+      // No API key — use first two words as best-effort keyword
+      return [words.slice(0, 2).join(' ')];
+    }
+
+    try {
+      const msg = await this.anthropicClient.messages.create({
+        model: this.extractionModel,
+        max_tokens: 80,
+        messages: [
+          {
+            role: 'user',
+            content: `Extract the main software product name only. Return a JSON array with just the product name(s).
+"Intapp Terms to be implemented" -> ["Intapp"]
+"iManage cloud migration" -> ["iManage"]
+"NetDocuments rollout project" -> ["NetDocuments"]
+"Aderant Elite upgrade" -> ["Aderant", "Elite"]
+Input: "${trimmed.replace(/"/g, "'")}"
+JSON:`,
+          },
+        ],
+      });
+
+      const text =
+        msg.content[0]?.type === 'text' ? msg.content[0].text.trim() : '';
+      const cleaned = text.replace(/```json?|```/g, '').trim();
+      const parsed: unknown = JSON.parse(cleaned);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed
+          .map((item: unknown) => String(item).trim())
+          .filter(Boolean);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `extractSystemKeywords failed for input="${trimmed}": ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    // Fallback: first two words
+    return [words.slice(0, 2).join(' ')];
+  }
+
+  private async fetchVendorsBySystemKeywords(
+    keywords: string[],
+    categoryId: number,
+  ): Promise<Vendor[]> {
+    const qb = this.vendorsRepository
+      .createQueryBuilder('vendor')
+      .innerJoin(
+        'vendor_project_categories',
+        'vpc',
+        'vpc.vendor_id = vendor.id AND vpc.project_category_id = :categoryId',
+        { categoryId },
+      )
+      .where('vendor.status IN (:...statuses)', {
+        statuses: this.ACTIVE_VENDOR_STATUSES,
+      });
+
+    const conditions = keywords
+      .map(
+        (_, i) =>
+          `(LOWER(vendor.legal_tech_stack) LIKE :kw${i}` +
+          ` OR LOWER(vendor.platforms_experience) LIKE :kw${i}` +
+          ` OR LOWER(vendor.listing_specialty) LIKE :kw${i}` +
+          ` OR LOWER(vendor.service_domains) LIKE :kw${i}` +
+          ` OR LOWER(vendor.brand_name) LIKE :kw${i})`,
+      )
+      .join(' OR ');
+
+    const params = keywords.reduce<Record<string, string>>(
+      (acc, kw, i) => ({ ...acc, [`kw${i}`]: `%${kw.toLowerCase()}%` }),
+      {},
+    );
+
+    return qb.andWhere(`(${conditions})`, params).getMany();
+  }
+
+  private async fetchVendorsByCategory(categoryId: number): Promise<Vendor[]> {
+    return this.vendorsRepository
+      .createQueryBuilder('vendor')
+      .innerJoin(
+        'vendor_project_categories',
+        'vpc',
+        'vpc.vendor_id = vendor.id AND vpc.project_category_id = :categoryId',
+        { categoryId },
+      )
+      .where('vendor.status IN (:...statuses)', {
+        statuses: this.ACTIVE_VENDOR_STATUSES,
       })
-      .andWhere('vpc.vendor_id IN (:...vendorIds)', { vendorIds })
-      .getRawMany<{ vendor_id: string }>();
-
-    return new Set(rows.map((row) => Number(row.vendor_id)));
-  }
-
-  private isVendorEligibleForProject(
-    vendor: Vendor,
-    project: Project,
-    vendorIdsMappedToProjectCategory: Set<number>,
-    resolvedProjectSystem: ResolvedProjectSystem | null,
-  ): boolean {
-    const projectIndustry = this.resolveProjectIndustryValue(project);
-    if (projectIndustry !== LEGAL_CLIENT_INDUSTRY_VALUE) {
-      return false;
-    }
-
-    if (!vendorIdsMappedToProjectCategory.has(vendor.id)) {
-      return false;
-    }
-
-    // When system resolution produced no terms, fall through to category-only
-    // eligibility so users always see results. System score will be 0 for these.
-    if (!resolvedProjectSystem || resolvedProjectSystem.searchTerms.length === 0) {
-      return true;
-    }
-
-    return this.vendorSupportsResolvedSystem(vendor, resolvedProjectSystem);
-  }
-
-  private resolveProjectIndustryValue(project: Project): string {
-    return String(project.clientIndustry?.value || '')
-      .trim()
-      .toLowerCase();
+      .getMany();
   }
 
   private vendorSupportsResolvedSystem(
@@ -504,63 +535,6 @@ export class ProjectRecommendationsService {
       ? this.WEIGHTS.CAPABILITY
       : 0;
     return { points, maxPoints: this.WEIGHTS.CAPABILITY };
-  }
-
-  private buildProjectSystemResolutionContext(
-    vendors: Vendor[],
-    vendorIdsMappedToProjectCategory: Set<number>,
-  ): ProjectSystemResolutionContext {
-    const mappedVendors = vendors.filter((vendor) =>
-      vendorIdsMappedToProjectCategory.has(vendor.id),
-    );
-
-    const legalTechStackTerms = this.collectUniqueResolutionTerms(
-      mappedVendors.flatMap((vendor) =>
-        this.parseListValues(
-          [
-            vendor.legal_tech_stack,
-            vendor.platforms_experience,
-            vendor.listing_specialty,
-          ]
-            .filter(Boolean)
-            .join(','),
-        ),
-      ),
-      80,
-    );
-
-    const vendorCategories = this.collectUniqueResolutionTerms(
-      mappedVendors.flatMap((vendor) => [
-        String(vendor.vendor_type || '').trim(),
-        ...this.parseListValues(vendor.service_domains),
-      ]),
-      25,
-    );
-
-    return {
-      legalTechStackTerms,
-      vendorCategories,
-    };
-  }
-
-  private collectUniqueResolutionTerms(
-    values: string[],
-    limit: number,
-  ): string[] {
-    const seen = new Set<string>();
-    const deduplicated: string[] = [];
-
-    values.forEach((value) => {
-      const normalized = normalizeMatchingText(value);
-      if (!normalized || seen.has(normalized)) {
-        return;
-      }
-
-      seen.add(normalized);
-      deduplicated.push(value.trim());
-    });
-
-    return deduplicated.slice(0, limit);
   }
 
   private calculateSystemScore(
@@ -1030,11 +1004,8 @@ export class ProjectRecommendationsService {
         strictCategoryGate: true,
         categoryMatchSource: 'vendor_project_categories',
         strictSystemGate: true,
-        projectSystemMatchMode: 'ai-assisted-resolution',
+        projectSystemMatchMode: 'db-ilike-keyword',
         vendorSystemField: 'legal_tech_stack+platforms_experience+listing_specialty+service_domains+brand_name',
-        systemResolutionPolicy: JSON.parse(
-          this.projectSystemResolutionService.getPolicyVersion(),
-        ),
       },
       reasoningPolicy: {
         allMatchesHaveReason: true,
