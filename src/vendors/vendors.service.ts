@@ -1,5 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import Anthropic from '@anthropic-ai/sdk';
 import { Brackets, Repository, SelectQueryBuilder } from 'typeorm';
 import { Vendor } from './entities/vendor.entity';
 import { VendorClient } from './entities/vendor-client.entity';
@@ -55,6 +57,8 @@ interface VendorProjectContext {
 
 @Injectable()
 export class VendorsService {
+  private readonly logger = new Logger(VendorsService.name);
+  private readonly anthropic: Anthropic | null;
   private readonly LISTING_STATUSES = ['Prospect', 'Validated', 'Active'];
   private readonly SEARCHABLE_VENDOR_TEXT_SQL = `LOWER(CONCAT_WS(' ',
     COALESCE(vendor.brand_name, ''),
@@ -224,7 +228,13 @@ export class VendorsService {
     private projectVendorMatchesRepository: Repository<ProjectVendorMatch>,
     @InjectRepository(ProjectVendorReason)
     private projectVendorReasonsRepository: Repository<ProjectVendorReason>,
-  ) {}
+    private readonly configService: ConfigService,
+  ) {
+    const apiKey = String(
+      this.configService.get<string>('Anthropic_API_Key') || '',
+    ).trim();
+    this.anthropic = apiKey ? new Anthropic({ apiKey }) : null;
+  }
 
   async getListingFilterOptions(): Promise<VendorListingFilterOptionsResponseDto> {
     return {
@@ -861,20 +871,30 @@ export class VendorsService {
       };
     });
 
-    // Filter vendors that support the system name
-    const systemKeyword = String(projectCriteria.systemName || '').trim();
-    if (!systemKeyword) {
+    // Extract product keywords from the raw system name before matching.
+    // "Intapp Terms to be implemented" → ["Intapp"] so we don't pass the
+    // full sentence to textContainsSystemKeyword and get 0 results.
+    const rawSystemKeyword = String(projectCriteria.systemName || '').trim();
+    if (!rawSystemKeyword) {
       return [];
     }
 
+    const keywords = await this.extractTechKeywords(rawSystemKeyword);
+
     const systemSupportingVendors = vendorsWithScores.filter(({ vendor }) => {
-      return textContainsSystemKeyword(
-        String(vendor.legal_tech_stack || ''),
-        systemKeyword,
-      );
+      const vendorText = [
+        vendor.legal_tech_stack,
+        vendor.platforms_experience,
+        vendor.listing_specialty,
+        vendor.service_domains,
+        vendor.brand_name,
+      ]
+        .filter(Boolean)
+        .join(' ');
+      return keywords.some((kw) => textContainsSystemKeyword(vendorText, kw));
     });
 
-    // Filter out vendors with 0 or null matching scores
+    // Filter out vendors with 0 matching scores
     const validVendors = systemSupportingVendors.filter(
       ({ matchingScore }) => matchingScore > 0,
     );
@@ -882,13 +902,70 @@ export class VendorsService {
     // Sort by matching score (highest first)
     validVendors.sort((a, b) => b.matchingScore - a.matchingScore);
 
-    // Return only top 5 vendors
-    const top5Vendors = validVendors.slice(0, 5);
+    // Fallback: if keyword extraction still yields 0 matches, return top 5
+    // by overall score so the user never sees an empty results page.
+    if (validVendors.length === 0) {
+      this.logger.warn(
+        `No vendors matched keywords ${JSON.stringify(keywords)} for systemName="${rawSystemKeyword}" — returning top-scored fallback`,
+      );
+      const fallback = vendorsWithScores
+        .filter(({ matchingScore }) => matchingScore > 0)
+        .sort((a, b) => b.matchingScore - a.matchingScore)
+        .slice(0, 5);
+      return fallback.map(({ vendor, matchingScore }) =>
+        this.transformToResponseDto(vendor, matchingScore),
+      );
+    }
 
-    // Transform to response format
-    return top5Vendors.map(({ vendor, matchingScore }) =>
-      this.transformToResponseDto(vendor, matchingScore),
-    );
+    // Return only top 5 vendors
+    return validVendors
+      .slice(0, 5)
+      .map(({ vendor, matchingScore }) =>
+        this.transformToResponseDto(vendor, matchingScore),
+      );
+  }
+
+  private async extractTechKeywords(input: string): Promise<string[]> {
+    if (!input?.trim()) return [];
+    if (!this.anthropic) {
+      this.logger.warn('Anthropic not configured — using raw input as keyword');
+      return [input];
+    }
+    try {
+      const msg = await this.anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 100,
+        messages: [
+          {
+            role: 'user',
+            content: `Extract software/technology product names only. Return JSON array only, no explanation.
+Examples:
+"Intapp Terms to be implemented" -> ["Intapp"]
+"iManage cloud migration project" -> ["iManage"]
+"NetDocuments rollout" -> ["NetDocuments"]
+"Elite 3E upgrade" -> ["Elite 3E"]
+"Migrate our existing iManage to the cloud" -> ["iManage"]
+Input: "${input}"
+JSON array:`,
+          },
+        ],
+      });
+      const text =
+        msg.content[0].type === 'text' ? msg.content[0].text.trim() : '[]';
+      const parsed: unknown = JSON.parse(
+        text.replace(/```json?|```/g, '').trim(),
+      );
+      const keywords = Array.isArray(parsed)
+        ? parsed.filter((k) => typeof k === 'string' && k.trim())
+        : [];
+      // Always include raw input as final fallback so we never search nothing
+      return keywords.length > 0 ? keywords : [input];
+    } catch (err) {
+      this.logger.warn(
+        `extractTechKeywords failed for "${input}": ${String(err)}`,
+      );
+      return [input];
+    }
   }
 
   private calculateMatchingScore(
@@ -988,12 +1065,18 @@ export class VendorsService {
       return 0;
     }
 
-    return textContainsSystemKeyword(
-      String(vendor.legal_tech_stack || ''),
-      systemKeyword,
-    )
-      ? 1
-      : 0;
+    // Check across all relevant vendor text fields, not just legal_tech_stack
+    const vendorText = [
+      vendor.legal_tech_stack,
+      vendor.platforms_experience,
+      vendor.listing_specialty,
+      vendor.service_domains,
+      vendor.brand_name,
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    return textContainsSystemKeyword(vendorText, systemKeyword) ? 1 : 0;
   }
 
   private calculatePricingFit(
