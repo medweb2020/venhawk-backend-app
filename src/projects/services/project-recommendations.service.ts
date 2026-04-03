@@ -184,11 +184,13 @@ export class ProjectRecommendationsService {
           Number(result.displayScore) > this.OVERFLOW_DISPLAY_SCORE_THRESHOLD,
       );
     let scored = [...primary, ...overflow];
+    let noExactMatch = false;
 
     // Fallback: if system-term matching produced 0 results, return top
     // category-matched vendors ranked by capability + proof scores so the
     // user never sees an empty page.
     if (scored.length === 0) {
+      noExactMatch = true;
       this.logger.warn(
         `No vendors matched system terms for projectId=${project.id} — falling back to category-only ranking`,
       );
@@ -255,6 +257,7 @@ export class ProjectRecommendationsService {
       scoringVersion: this.SCORING_VERSION,
       computedAt,
       totalRecommended: scored.length,
+      noExactMatch,
       recommendedVendors: scored.map((result) =>
         this.toVendorResponseDto(
           result.vendor,

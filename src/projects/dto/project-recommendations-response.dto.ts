@@ -5,5 +5,6 @@ export class ProjectRecommendationsResponseDto {
   scoringVersion: string;
   computedAt: Date;
   totalRecommended: number;
+  noExactMatch?: boolean;
   recommendedVendors: VendorResponseDto[];
 }

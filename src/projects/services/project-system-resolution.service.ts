@@ -321,7 +321,19 @@ export class ProjectSystemResolutionService {
     source: ProjectSystemResolutionSource,
     extraSearchTerms: string[] = [],
   ): ResolvedProjectSystem {
+    // Extract individual tokens from resolvedLabel and rawInput so that
+    // single-word product names (e.g. "Intapp", "iManage") are always
+    // included as standalone search terms, even when the user typed a
+    // multi-word phrase like "Intapp Terms to be implemented".
+    const individualTokens = Array.from(
+      new Set([
+        ...normalizeMatchingText(resolvedLabel).split(/\s+/),
+        ...normalizeMatchingText(rawInput).split(/\s+/),
+      ]),
+    ).filter((t) => t.length >= 4 && !this.ignoredTerms.has(t));
+
     const searchTerms = this.sanitizeSearchTerms([
+      ...individualTokens,
       ...extraSearchTerms,
       resolvedLabel,
       matchedAllowedSystem || '',
