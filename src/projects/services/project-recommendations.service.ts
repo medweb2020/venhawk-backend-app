@@ -183,7 +183,36 @@ export class ProjectRecommendationsService {
         (result) =>
           Number(result.displayScore) > this.OVERFLOW_DISPLAY_SCORE_THRESHOLD,
       );
-    const scored = [...primary, ...overflow];
+    let scored = [...primary, ...overflow];
+
+    // Fallback: if system-term matching produced 0 results, return top
+    // category-matched vendors ranked by capability + proof scores so the
+    // user never sees an empty page.
+    if (scored.length === 0) {
+      this.logger.warn(
+        `No vendors matched system terms for projectId=${project.id} — falling back to category-only ranking`,
+      );
+      const fallbackRanked = vendors
+        .filter((vendor) =>
+          this.isVendorEligibleForProject(
+            vendor,
+            project,
+            vendorIdsMappedToProjectCategory,
+            null,
+          ),
+        )
+        .map((vendor) =>
+          this.scoreVendor(
+            vendor,
+            project,
+            vendorIdsMappedToProjectCategory,
+            null,
+          ),
+        )
+        .filter((result) => result.rawScore > 0)
+        .sort((a, b) => b.rawScore - a.rawScore);
+      scored = fallbackRanked.slice(0, this.BASE_RECOMMENDATION_LIMIT);
+    }
     const reasoningByVendorId =
       await this.projectRecommendationReasoningService.generateTopMatchReasons(
         project.id,
@@ -377,8 +406,10 @@ export class ProjectRecommendationsService {
       return false;
     }
 
+    // When system resolution produced no terms, fall through to category-only
+    // eligibility so users always see results. System score will be 0 for these.
     if (!resolvedProjectSystem || resolvedProjectSystem.searchTerms.length === 0) {
-      return false;
+      return true;
     }
 
     return this.vendorSupportsResolvedSystem(vendor, resolvedProjectSystem);
@@ -394,7 +425,16 @@ export class ProjectRecommendationsService {
     vendor: Vendor,
     resolvedProjectSystem: ResolvedProjectSystem,
   ): boolean {
-    const vendorSystemText = String(vendor.legal_tech_stack || '');
+    // Search across all relevant vendor text fields, not just legal_tech_stack
+    const vendorSystemText = [
+      vendor.legal_tech_stack,
+      vendor.platforms_experience,
+      vendor.listing_specialty,
+      vendor.service_domains,
+      vendor.brand_name,
+    ]
+      .filter(Boolean)
+      .join(' ');
     return resolvedProjectSystem.searchTerms.some((searchTerm) =>
       textContainsSystemKeyword(vendorSystemText, searchTerm),
     );
@@ -988,7 +1028,7 @@ export class ProjectRecommendationsService {
         categoryMatchSource: 'vendor_project_categories',
         strictSystemGate: true,
         projectSystemMatchMode: 'ai-assisted-resolution',
-        vendorSystemField: 'legal_tech_stack',
+        vendorSystemField: 'legal_tech_stack+platforms_experience+listing_specialty+service_domains+brand_name',
         systemResolutionPolicy: JSON.parse(
           this.projectSystemResolutionService.getPolicyVersion(),
         ),
