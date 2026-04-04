@@ -137,11 +137,8 @@ export class ProjectRecommendationsService {
     let vendors: Vendor[] = [];
     let noExactMatch = false;
 
-    if (keywords.length > 0 && project.project_category_id) {
-      vendors = await this.fetchVendorsBySystemKeywords(
-        keywords,
-        project.project_category_id,
-      );
+    if (keywords.length > 0) {
+      vendors = await this.fetchVendorsBySystemKeywords(keywords);
     }
 
     // 3. Category-only fallback if no system matches found
@@ -407,23 +404,9 @@ JSON:`,
 
   private async fetchVendorsBySystemKeywords(
     keywords: string[],
-    categoryId: number,
   ): Promise<Vendor[]> {
-    const qb = this.vendorsRepository
-      .createQueryBuilder('vendor')
-      .innerJoin(
-        'vendor_project_categories',
-        'vpc',
-        'vpc.vendor_id = vendor.id AND vpc.project_category_id = :categoryId',
-        { categoryId },
-      )
-      .where('vendor.status IN (:...statuses)', {
-        statuses: this.ACTIVE_VENDOR_STATUSES,
-      });
-
-    // legal_tech_stack is the "Systems Supported" column (CSV of system names).
-    // Matching only this column keeps the eligibility gate focused on
-    // declared system expertise; other text fields are used only for scoring.
+    // Gate on legal_tech_stack only — the "Systems Supported" column.
+    // No category join here: category filtering is the fallback path only.
     const conditions = keywords
       .map((_, i) => `LOWER(vendor.legal_tech_stack) LIKE :kw${i}`)
       .join(' OR ');
@@ -433,7 +416,13 @@ JSON:`,
       {},
     );
 
-    return qb.andWhere(`(${conditions})`, params).getMany();
+    return this.vendorsRepository
+      .createQueryBuilder('vendor')
+      .where('vendor.status IN (:...statuses)', {
+        statuses: this.ACTIVE_VENDOR_STATUSES,
+      })
+      .andWhere(`(${conditions})`, params)
+      .getMany();
   }
 
   private async fetchVendorsByCategory(categoryId: number): Promise<Vendor[]> {
