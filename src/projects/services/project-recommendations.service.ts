@@ -421,15 +421,11 @@ JSON:`,
         statuses: this.ACTIVE_VENDOR_STATUSES,
       });
 
+    // legal_tech_stack is the "Systems Supported" column (CSV of system names).
+    // Matching only this column keeps the eligibility gate focused on
+    // declared system expertise; other text fields are used only for scoring.
     const conditions = keywords
-      .map(
-        (_, i) =>
-          `(LOWER(vendor.legal_tech_stack) LIKE :kw${i}` +
-          ` OR LOWER(vendor.platforms_experience) LIKE :kw${i}` +
-          ` OR LOWER(vendor.listing_specialty) LIKE :kw${i}` +
-          ` OR LOWER(vendor.service_domains) LIKE :kw${i}` +
-          ` OR LOWER(vendor.brand_name) LIKE :kw${i})`,
-      )
+      .map((_, i) => `LOWER(vendor.legal_tech_stack) LIKE :kw${i}`)
       .join(' OR ');
 
     const params = keywords.reduce<Record<string, string>>(
