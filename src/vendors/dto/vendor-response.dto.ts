@@ -4,7 +4,6 @@ export class VendorResponseDto {
   name: string;
   logo: string;
   logoUrl: string;
-  websiteUrl: string | null;
   category: string;
   location: string;
   rating: number;
