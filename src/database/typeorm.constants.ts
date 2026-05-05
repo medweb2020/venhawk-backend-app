@@ -7,6 +7,8 @@ import { Vendor } from '../vendors/entities/vendor.entity';
 import { VendorClient } from '../vendors/entities/vendor-client.entity';
 import { VendorCaseStudy } from '../vendors/entities/vendor-case-study.entity';
 import { VendorReview } from '../vendors/entities/vendor-review.entity';
+import { System } from '../systems/entities/system.entity';
+import { SystemResolverLog } from '../systems/entities/system-resolver-log.entity';
 import { ProjectVendorMatch } from '../projects/entities/project-vendor-match.entity';
 import { ProjectVendorReason } from '../projects/entities/project-vendor-reason.entity';
 import { VendorProjectCategory } from '../projects/entities/vendor-project-category.entity';
@@ -38,10 +40,17 @@ import { RefreshWeakCaseStudySummaries20260312161000 } from './migrations/202603
 import { VendorCaseStudyExpansion20260312213000 } from './migrations/20260312213000-vendor-case-study-expansion';
 import { NormalizeCaseStudyContent20260313100000 } from './migrations/20260313100000-normalize-case-study-content';
 import { VendorCaseStudyUserSourceAdditions20260313113000 } from './migrations/20260313113000-vendor-case-study-user-source-additions';
+import { FixVendorAndClientLogos20260430000000 } from './migrations/20260430000000-fix-vendor-and-client-logos';
+import { SystemsAndVendorSystemsTables20260504000000 } from './migrations/20260504000000-systems-and-vendor-systems-tables';
+import { SeedSystems20260504000001 } from './migrations/20260504000001-seed-systems';
+import { SystemResolverLogTable20260504000002 } from './migrations/20260504000002-system-resolver-log-table';
+import { SeedAdditionalSystemsBatch120260505000000 } from './migrations/20260505000000-seed-additional-systems-batch1';
 
 export const TYPEORM_ENTITIES = [
   User,
   Project,
+  System,
+  SystemResolverLog,
   ClientIndustry,
   ProjectCategory,
   ProjectFile,
@@ -83,6 +92,11 @@ export const TYPEORM_MIGRATIONS = [
   VendorCaseStudyExpansion20260312213000,
   NormalizeCaseStudyContent20260313100000,
   VendorCaseStudyUserSourceAdditions20260313113000,
+  FixVendorAndClientLogos20260430000000,
+  SystemsAndVendorSystemsTables20260504000000,
+  SeedSystems20260504000001,
+  SystemResolverLogTable20260504000002,
+  SeedAdditionalSystemsBatch120260505000000,
 ];
 
 export const TYPEORM_MIGRATIONS_TABLE_NAME = 'typeorm_migrations';

@@ -8,7 +8,10 @@ import { Project } from '../entities/project.entity';
 import { ProjectVendorMatch } from '../entities/project-vendor-match.entity';
 import { Vendor } from '../../vendors/entities/vendor.entity';
 import { VendorResponseDto } from '../../vendors/dto/vendor-response.dto';
-import { ProjectRecommendationsResponseDto } from '../dto/project-recommendations-response.dto';
+import {
+  ProjectRecommendationsResponseDto,
+  ResolverCandidateDto,
+} from '../dto/project-recommendations-response.dto';
 import { VendorsService } from '../../vendors/vendors.service';
 import { VendorListingFiltersDto } from '../../vendors/dto/vendor-listing-filters.dto';
 import {
@@ -23,6 +26,7 @@ import {
   textContainsSystemKeyword,
 } from '../constants/project-matching.constants';
 import { ResolvedProjectSystem } from './project-system-resolution.service';
+import { SystemResolverService } from '../../systems/services/system-resolver.service';
 
 interface DimensionScore {
   points: number;
@@ -78,6 +82,7 @@ export class ProjectRecommendationsService {
     private readonly vendorsService: VendorsService,
     private readonly projectRecommendationReasoningService: ProjectRecommendationReasoningService,
     private readonly configService: ConfigService,
+    private readonly systemResolverService: SystemResolverService,
   ) {
     const apiKey = String(this.configService.get<string>('Anthropic_API_Key') || '').trim();
     this.extractionModel = String(
@@ -128,46 +133,83 @@ export class ProjectRecommendationsService {
   ): Promise<ProjectRecommendationsResponseDto> {
     const startedAt = Date.now();
 
-    // 1. Extract the core product keyword(s) from the user's system name
-    const keywords = await this.extractSystemKeywords(
-      String(project.system_name || ''),
-    );
-
-    // 2. Fetch vendors via DB — system-keyword ILIKE match, category-gated
+    // 1. Resolve the project system name via SystemResolverService
+    //    (5-tier: exact canonical → alias → fuzzy → LLM → unresolved)
+    const rawSystemName = String(project.system_name || '').trim();
     let vendors: Vendor[] = [];
-    let noExactMatch = false;
+    let resolvedProjectSystem: ResolvedProjectSystem | null = null;
+    const systemMatchedVendorIds = new Set<number>();
+    let resolverStatus: ProjectRecommendationsResponseDto['resolverStatus'] = 'not_attempted';
+    let resolverCandidates: ResolverCandidateDto[] | undefined;
 
-    if (keywords.length > 0) {
-      vendors = await this.fetchVendorsBySystemKeywords(keywords);
-    }
+    if (rawSystemName) {
+      const resolution = await this.systemResolverService.resolve(rawSystemName);
 
-    // 3. Category-only fallback if no system matches found
-    if (vendors.length === 0) {
-      if (keywords.length > 0) {
-        noExactMatch = true;
-        this.logger.warn(
-          `No vendors matched system keywords ${JSON.stringify(keywords)} for projectId=${project.id} — falling back to category-only ranking`,
+      if (resolution.resolved && resolution.system) {
+        // 2a. System resolved — fetch vendors via vendor_systems JOIN (strict system_id match)
+        resolverStatus = 'resolved';
+        vendors = await this.fetchVendorsBySystemId(resolution.system.id);
+        vendors.forEach((v) => systemMatchedVendorIds.add(v.id));
+
+        resolvedProjectSystem = {
+          rawInput: rawSystemName,
+          resolvedLabel: resolution.system.canonicalName,
+          matchedAllowedSystem: null,
+          searchTerms: [resolution.system.canonicalName],
+          source: resolution.tier <= 2 ? 'exact' : 'claude',
+        };
+
+        this.logger.debug(
+          `SystemResolverService resolved "${rawSystemName}" → "${resolution.system.canonicalName}" (id=${resolution.system.id}, tier=${resolution.tier}) — ${vendors.length} vendor(s) matched`,
         );
+      } else {
+        // 2b. System unresolved (Tier 5) — strict mode: NO category fallback.
+        //     Return empty result with candidates for UI disambiguation.
+        resolverStatus = 'unresolved';
+        resolverCandidates = resolution.candidates.slice(0, 3).map((c) => ({
+          id: c.id,
+          canonicalName: c.canonicalName,
+          confidence: c.confidence,
+        }));
+
+        this.logger.warn(
+          `SystemResolverService Tier ${resolution.tier} (unresolved) for "${rawSystemName}" ` +
+            `(projectId=${project.id}) — top candidates: ${JSON.stringify(resolverCandidates)}`,
+        );
+
+        // Clear any stale stored matches for this project, then return early.
+        await this.projectVendorMatchesRepository.manager.transaction(
+          async (entityManager) => {
+            await entityManager.delete(ProjectVendorMatch, { project_id: project.id });
+          },
+        );
+
+        const durationMs = Date.now() - startedAt;
+        this.logger.log(
+          `recommendation compute completed projectId=${project.id} userId=${userId} recommendedCount=0 resolverStatus=unresolved durationMs=${durationMs}`,
+        );
+
+        return {
+          projectId: project.id,
+          scoringVersion: this.SCORING_VERSION,
+          computedAt: new Date(),
+          totalRecommended: 0,
+          noEligibleVendors: true,
+          resolverStatus: 'unresolved',
+          resolverCandidates,
+          submittedSystemName: rawSystemName,
+          recommendedVendors: [],
+        };
       }
+    } else {
+      // 3. No system name submitted — category-only fallback (permitted for blank system).
       if (project.project_category_id) {
         vendors = await this.fetchVendorsByCategory(project.project_category_id);
       }
     }
 
-    // All DB-returned vendors are already category-filtered — build the set from them
+    // Set of all fetched vendor IDs — used for capability score
     const vendorIdsMappedToProjectCategory = new Set(vendors.map((v) => v.id));
-
-    // Synthetic ResolvedProjectSystem from keywords for scoring + reasoning
-    const resolvedProjectSystem: ResolvedProjectSystem | null =
-      !noExactMatch && keywords.length > 0
-        ? {
-            rawInput: String(project.system_name || ''),
-            resolvedLabel: keywords[0],
-            matchedAllowedSystem: null,
-            searchTerms: keywords,
-            source: 'claude',
-          }
-        : null;
 
     const ranked = vendors
       .map((vendor) =>
@@ -176,6 +218,7 @@ export class ProjectRecommendationsService {
           project,
           vendorIdsMappedToProjectCategory,
           resolvedProjectSystem,
+          systemMatchedVendorIds,
         ),
       )
       .filter((result) => result.rawScore > 0)
@@ -228,12 +271,14 @@ export class ProjectRecommendationsService {
       },
     );
 
-    const response = {
+    const response: ProjectRecommendationsResponseDto = {
       projectId: project.id,
       scoringVersion: this.SCORING_VERSION,
       computedAt,
       totalRecommended: scored.length,
-      noExactMatch,
+      noEligibleVendors: scored.length === 0,
+      resolverStatus,
+      ...(rawSystemName ? { submittedSystemName: rawSystemName } : {}),
       recommendedVendors: scored.map((result) =>
         this.toVendorResponseDto(
           result.vendor,
@@ -311,6 +356,8 @@ export class ProjectRecommendationsService {
       scoringVersion,
       computedAt,
       totalRecommended: matches.length,
+      noEligibleVendors: matches.length === 0,
+      resolverStatus: 'resolved' as const,
       recommendedVendors: matches.map((match) => {
         const scoreBreakdown = (match.score_breakdown_json || {}) as Record<
           string,
@@ -425,6 +472,21 @@ JSON:`,
       .getMany();
   }
 
+  private async fetchVendorsBySystemId(systemId: number): Promise<Vendor[]> {
+    return this.vendorsRepository
+      .createQueryBuilder('vendor')
+      .innerJoin(
+        'vendor_systems',
+        'vs',
+        'vs.vendor_id = vendor.id AND vs.system_id = :systemId',
+        { systemId },
+      )
+      .where('vendor.status IN (:...statuses)', {
+        statuses: this.ACTIVE_VENDOR_STATUSES,
+      })
+      .getMany();
+  }
+
   private async fetchVendorsByCategory(categoryId: number): Promise<Vendor[]> {
     return this.vendorsRepository
       .createQueryBuilder('vendor')
@@ -464,12 +526,13 @@ JSON:`,
     project: Project,
     vendorIdsMappedToProjectCategory: Set<number>,
     resolvedProjectSystem: ResolvedProjectSystem | null,
+    systemMatchedVendorIds: Set<number>,
   ): VendorRecommendationResult {
     const capability = this.calculateCapabilityScore(
       vendor,
       vendorIdsMappedToProjectCategory,
     );
-    const system = this.calculateSystemScore(vendor, resolvedProjectSystem);
+    const system = this.calculateSystemScore(vendor, resolvedProjectSystem, systemMatchedVendorIds);
     const pricing = this.calculatePricingScore(vendor, project);
     const timeline = this.calculateTimelineScore(vendor, project);
     const proofReviews = this.calculateProofReviewsScore(vendor);
@@ -525,15 +588,15 @@ JSON:`,
   private calculateSystemScore(
     vendor: Vendor,
     resolvedProjectSystem: ResolvedProjectSystem | null,
+    systemMatchedVendorIds: Set<number>,
   ): DimensionScore {
-    if (!resolvedProjectSystem || resolvedProjectSystem.searchTerms.length === 0) {
+    if (!resolvedProjectSystem) {
       return { points: 0, maxPoints: this.WEIGHTS.SYSTEM };
     }
 
-    const points = this.vendorSupportsResolvedSystem(vendor, resolvedProjectSystem)
-      ? this.WEIGHTS.SYSTEM
-      : 0;
-
+    // Strict DB-join path: vendor was fetched from vendor_systems by system_id.
+    // All members of systemMatchedVendorIds are confirmed system supporters.
+    const points = systemMatchedVendorIds.has(vendor.id) ? this.WEIGHTS.SYSTEM : 0;
     return { points, maxPoints: this.WEIGHTS.SYSTEM };
   }
 
@@ -989,8 +1052,8 @@ JSON:`,
         strictCategoryGate: true,
         categoryMatchSource: 'vendor_project_categories',
         strictSystemGate: true,
-        projectSystemMatchMode: 'db-ilike-keyword',
-        vendorSystemField: 'legal_tech_stack+platforms_experience+listing_specialty+service_domains+brand_name',
+        projectSystemMatchMode: 'db-join-system-id-strict',
+        vendorSystemField: 'vendor_systems.system_id',
       },
       reasoningPolicy: {
         allMatchesHaveReason: true,

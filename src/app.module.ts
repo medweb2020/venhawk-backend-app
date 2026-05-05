@@ -8,6 +8,7 @@ import { UsersModule } from './users/users.module';
 import { ProjectsModule } from './projects/projects.module';
 import { FilesModule } from './files/files.module';
 import { VendorsModule } from './vendors/vendors.module';
+import { SystemsModule } from './systems/systems.module';
 import {
   TYPEORM_ENTITIES,
   TYPEORM_MIGRATIONS,
@@ -43,6 +44,7 @@ import {
     ProjectsModule,
     FilesModule,
     VendorsModule,
+    SystemsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

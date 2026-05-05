@@ -14,6 +14,7 @@ import { ProjectVendorReason } from './entities/project-vendor-reason.entity';
 import { VendorProjectCategory } from './entities/vendor-project-category.entity';
 import { ProjectRecommendationsService } from './services/project-recommendations.service';
 import { ProjectRecommendationReasoningService } from './services/project-recommendation-reasoning.service';
+import { SystemsModule } from '../systems/systems.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { ProjectRecommendationReasoningService } from './services/project-recomm
     ]),
     UsersModule,
     VendorsModule,
+    SystemsModule,
   ],
   controllers: [ProjectsController],
   providers: [
