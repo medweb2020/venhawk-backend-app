@@ -45,6 +45,8 @@ import { SystemsAndVendorSystemsTables20260504000000 } from './migrations/202605
 import { SeedSystems20260504000001 } from './migrations/20260504000001-seed-systems';
 import { SystemResolverLogTable20260504000002 } from './migrations/20260504000002-system-resolver-log-table';
 import { SeedAdditionalSystemsBatch120260505000000 } from './migrations/20260505000000-seed-additional-systems-batch1';
+import { RecommendationReasoningCache } from '../projects/entities/recommendation-reasoning-cache.entity';
+import { RecommendationReasoningCache20260507000000 } from './migrations/20260507000000-recommendation-reasoning-cache';
 
 export const TYPEORM_ENTITIES = [
   User,
@@ -56,6 +58,7 @@ export const TYPEORM_ENTITIES = [
   ProjectFile,
   ProjectVendorMatch,
   ProjectVendorReason,
+  RecommendationReasoningCache,
   VendorProjectCategory,
   Vendor,
   VendorClient,
@@ -97,6 +100,7 @@ export const TYPEORM_MIGRATIONS = [
   SeedSystems20260504000001,
   SystemResolverLogTable20260504000002,
   SeedAdditionalSystemsBatch120260505000000,
+  RecommendationReasoningCache20260507000000,
 ];
 
 export const TYPEORM_MIGRATIONS_TABLE_NAME = 'typeorm_migrations';

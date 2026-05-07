@@ -43,3 +43,11 @@ lerna-debug.log*
 
 # Local operational output
 /tmp
+
+# Claude Code backup files
+*.bak
+check2-tests.ts
+
+# Claude Code backup files
+*.bak
+check2-tests.ts

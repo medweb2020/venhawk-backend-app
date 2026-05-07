@@ -9,9 +9,11 @@ import { ProjectFile } from '../files/entities/project-file.entity';
 import { UsersModule } from '../users/users.module';
 import { VendorsModule } from '../vendors/vendors.module';
 import { Vendor } from '../vendors/entities/vendor.entity';
+import { VendorClient } from '../vendors/entities/vendor-client.entity';
 import { ProjectVendorMatch } from './entities/project-vendor-match.entity';
 import { ProjectVendorReason } from './entities/project-vendor-reason.entity';
 import { VendorProjectCategory } from './entities/vendor-project-category.entity';
+import { RecommendationReasoningCache } from './entities/recommendation-reasoning-cache.entity';
 import { ProjectRecommendationsService } from './services/project-recommendations.service';
 import { ProjectRecommendationReasoningService } from './services/project-recommendation-reasoning.service';
 import { SystemsModule } from '../systems/systems.module';
@@ -24,9 +26,11 @@ import { SystemsModule } from '../systems/systems.module';
       ProjectCategory,
       ProjectFile,
       Vendor,
+      VendorClient,
       ProjectVendorMatch,
       ProjectVendorReason,
       VendorProjectCategory,
+      RecommendationReasoningCache,
     ]),
     UsersModule,
     VendorsModule,
