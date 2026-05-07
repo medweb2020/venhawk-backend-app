@@ -257,6 +257,59 @@ describe('SystemResolverService', () => {
     });
   });
 
+  // ── Tier 2.5: Word-tokenization ────────────────────────────────────────────
+
+  describe('Tier 2.5 — word-tokenization', () => {
+    it('"Azure Upgrade" → token "Azure" resolves to Microsoft Azure (id=29), confidence=0.90', async () => {
+      const result = await service.resolve('Azure Upgrade');
+      expect(result.resolved).toBe(true);
+      expect(result.system?.id).toBe(29);
+      expect(result.confidence).toBe(0.90);
+      expect(result.tier).toBe(2);
+    });
+
+    it('"Workday Adaptive" → token "Workday" resolves to Workday HCM (id=48), confidence=0.90', async () => {
+      const result = await service.resolve('Workday Adaptive');
+      expect(result.resolved).toBe(true);
+      expect(result.system?.id).toBe(48);
+      expect(result.confidence).toBe(0.90);
+    });
+
+    it('"Salesforce Expansion" → token "Salesforce" resolves to Salesforce Sales Cloud (id=57)', async () => {
+      const result = await service.resolve('Salesforce Expansion');
+      expect(result.resolved).toBe(true);
+      expect(result.system?.id).toBe(57);
+      expect(result.confidence).toBe(0.90);
+    });
+
+    it('"Intapp Migration Project" → token "intapp" resolves to Intapp Open (id=1)', async () => {
+      const result = await service.resolve('Intapp Migration Project');
+      expect(result.resolved).toBe(true);
+      expect(result.system?.id).toBe(1);
+      expect(result.confidence).toBe(0.90);
+    });
+
+    it('"Azure Intapp" (two tokens resolve to different systems) → unresolved (no LLM in tests)', async () => {
+      // "azure" → Microsoft Azure (id=29), "intapp" → Intapp Open (id=1) — ambiguous.
+      // Escalates to Tier 4; without Anthropic client in test env, falls to Tier 5.
+      const result = await service.resolve('Azure Intapp');
+      expect(result.resolved).toBe(false);
+    });
+
+    it('"completely fake xyz" → no token matches → falls through to Tier 5', async () => {
+      const result = await service.resolve('completely fake xyz');
+      expect(result.resolved).toBe(false);
+      expect(result.tier).toBe(5);
+    });
+
+    it('does not trigger on single-word inputs', async () => {
+      // "Workday" alone is a Tier-2 alias match, NOT a Tier-2.5 word-tokenization match
+      const result = await service.resolve('Workday');
+      expect(result.tier).toBe(2);
+      expect(result.confidence).toBe(0.95); // exact alias confidence, not 0.90
+    });
+  });
+
   // ── Tier 4/5: Ambiguous and unresolved ────────────────────────────────────
 
   describe('Tier 4/5 — ambiguous or unresolved', () => {
@@ -297,17 +350,52 @@ describe('SystemResolverService', () => {
   // ── Eligibility policy ─────────────────────────────────────────────────────
 
   describe('eligibilityPolicy metadata', () => {
-    it('includes strictSystemGate=true on all responses', async () => {
+    it('reflects family-expansion mode on all responses', async () => {
       const result = await service.resolve('Intapp Open');
       expect(result.eligibilityPolicy.strictSystemGate).toBe(true);
-      expect(result.eligibilityPolicy.productFamilyExpansion).toBe(false);
-      expect(result.eligibilityPolicy.projectSystemMatchMode).toBe('db-join-system-id-strict');
+      expect(result.eligibilityPolicy.productFamilyExpansion).toBe(true);
+      expect(result.eligibilityPolicy.projectSystemMatchMode).toBe('db-join-system-family');
     });
   });
 
-  // ── expandSystemIds (exists but not used by gate) ──────────────────────────
+  // ── getSystemIdsInFamily (used by eligibility gate) ────────────────────────
 
-  describe('expandSystemIds (design-doc method, not called by gate)', () => {
+  describe('getSystemIdsInFamily', () => {
+    it('returns all Intapp system IDs when given Intapp Open (id=1)', async () => {
+      const ids = await service.getSystemIdsInFamily(1);
+      expect(ids).toContain(1); // Intapp Open
+      expect(ids).toContain(2); // Intapp Intake
+      expect(ids).toContain(3); // Intapp Conflicts
+    });
+
+    it('returns all Microsoft system IDs when given Microsoft Azure (id=29)', async () => {
+      const ids = await service.getSystemIdsInFamily(29);
+      expect(ids).toContain(28); // Microsoft 365
+      expect(ids).toContain(29); // Microsoft Azure
+      expect(ids).toContain(38); // Active Directory
+    });
+
+    it('does NOT include systems from other families', async () => {
+      const ids = await service.getSystemIdsInFamily(1); // Intapp family
+      const microsoftInResult = ids.some((id) => [28, 29, 38].includes(id));
+      expect(microsoftInResult).toBe(false);
+    });
+
+    it('returns [systemId] for a system with no family (safety case)', async () => {
+      // Inject a system with no product_family
+      const noFamilySystems: Partial<System>[] = [
+        ...FIXTURE_SYSTEMS,
+        { id: 999, canonical_name: 'Unknown Tool', product_family: '', category: 'other' as const, aliases: [], is_active: true },
+      ];
+      const svc = await createService(noFamilySystems);
+      const ids = await svc.getSystemIdsInFamily(999);
+      expect(ids).toEqual([999]);
+    });
+  });
+
+  // ── expandSystemIds (bulk expansion, not used by gate directly) ────────────
+
+  describe('expandSystemIds (bulk expansion method)', () => {
     it('returns all Intapp system IDs when given Intapp Open', () => {
       const expanded = service.expandSystemIds([1]);
       expect(expanded).toContain(1); // Intapp Open

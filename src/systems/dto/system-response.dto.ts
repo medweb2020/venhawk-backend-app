@@ -1,7 +1,7 @@
 export const ELIGIBILITY_POLICY = {
   strictSystemGate: true,
-  productFamilyExpansion: false,
-  projectSystemMatchMode: 'db-join-system-id-strict',
+  productFamilyExpansion: true,
+  projectSystemMatchMode: 'db-join-system-family',
   vendorSystemField: 'vendor_systems.system_id',
 } as const;
 
@@ -40,4 +40,12 @@ export interface SystemSearchResultDto {
   productFamily: string;
   category: string;
   confidence: number;
+}
+
+/** Sibling system with vendor coverage, returned in empty-state responses. */
+export interface RelatedSystemDto {
+  id: number;
+  canonicalName: string;
+  productFamily: string;
+  vendorCount: number;
 }

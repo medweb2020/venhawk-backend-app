@@ -12,6 +12,7 @@ import { System } from '../entities/system.entity';
 import { SystemResolverLog } from '../entities/system-resolver-log.entity';
 import {
   ELIGIBILITY_POLICY,
+  RelatedSystemDto,
   ResolveSystemResponseDto,
   SystemCandidateDto,
   SystemSearchResultDto,
@@ -63,6 +64,11 @@ export class SystemResolverService implements OnModuleInit {
   private llmCallDate = new Date().toDateString();
   private readonly anthropic: Anthropic | null;
   private readonly llmModel: string;
+
+  // Vendor-count cache (per system_id) — refreshed every 5 minutes
+  private vendorCountCache: Map<number, number> | null = null;
+  private vendorCountCacheExpiry = 0;
+  private readonly VENDOR_COUNT_CACHE_TTL_MS = 5 * 60 * 1000;
 
   constructor(
     @InjectRepository(System)
@@ -142,6 +148,8 @@ export class SystemResolverService implements OnModuleInit {
 
   /**
    * Full 5-tier resolution. Logs Tier-4 invocations to the DB.
+   * Order: Tier 1 exact → Tier 2 alias → Tier 2.5 word-tokenization
+   *        → Tier 3 fuzzy → Tier 4 LLM → Tier 5 unresolved
    */
   async resolve(rawInput: string): Promise<ResolveSystemResponseDto> {
     const input = rawInput.trim();
@@ -164,6 +172,17 @@ export class SystemResolverService implements OnModuleInit {
     // avoid false positives (e.g. "PST" fuzzy-matching unrelated systems).
     if (input.length < 4) {
       return this.buildResponse(input, 5, null, null, []);
+    }
+
+    // Tier 2.5 — word-tokenization for multi-word inputs.
+    // Splits input on whitespace and checks each token against Tier 1/2.
+    // Treats non-matching words (e.g. "Upgrade", "Migration") as context noise.
+    if (input.includes(' ')) {
+      const tier25Result = await this.resolveTier25(input);
+      if (tier25Result !== null) {
+        return tier25Result;
+      }
+      // null → no high-confidence token match, fall through to Tier 3
     }
 
     // Tier 3 / 4 / 5 — fuzzy via Fuse.js
@@ -243,11 +262,29 @@ export class SystemResolverService implements OnModuleInit {
   }
 
   /**
+   * Returns all active system IDs in the same product_family as the given
+   * systemId. Used by the eligibility gate for family-wide vendor expansion.
+   *
+   * Returns [systemId] if the system has no family or is the sole member of
+   * its family (one-of-a-kind). Reads from the in-memory cache — O(n) on
+   * number of systems, no DB round-trip.
+   */
+  async getSystemIdsInFamily(systemId: number): Promise<number[]> {
+    const system = this.systemsCache.find((s) => s.id === systemId);
+    if (!system?.product_family) {
+      return [systemId];
+    }
+    const familyIds = this.systemsCache
+      .filter((s) => s.product_family === system.product_family)
+      .map((s) => s.id);
+    return familyIds.length > 0 ? familyIds : [systemId];
+  }
+
+  /**
    * Expand system IDs to all sibling IDs sharing the same product_family.
    *
-   * NOTE: This method EXISTS per the design spec but is NOT called by the
-   * eligibility gate. The eligibility gate uses strict system-id matching
-   * (see ELIGIBILITY_POLICY.productFamilyExpansion = false).
+   * NOTE: The eligibility gate now uses getSystemIdsInFamily() for single-system
+   * expansion. expandSystemIds() remains available for bulk/admin use cases.
    */
   expandSystemIds(systemIds: number[]): number[] {
     const families = new Set(
@@ -262,11 +299,127 @@ export class SystemResolverService implements OnModuleInit {
       .map((s) => s.id);
   }
 
+  /**
+   * Returns sibling systems in the same product_family that have at least one
+   * vendor in vendor_systems. Excludes the requesting system itself.
+   * Results are sorted by vendorCount descending and capped at `limit`.
+   *
+   * Vendor counts are cached in-memory for VENDOR_COUNT_CACHE_TTL_MS (5 min)
+   * because they change rarely and are queried frequently during empty-state responses.
+   */
+  async getRelatedSystemsForFamily(
+    productFamily: string,
+    excludeSystemId: number | null,
+    limit: number,
+  ): Promise<RelatedSystemDto[]> {
+    const vendorCounts = await this.getVendorCountsBySystem();
+
+    return this.systemsCache
+      .filter(
+        (s) =>
+          s.product_family === productFamily &&
+          s.id !== excludeSystemId &&
+          (vendorCounts.get(s.id) ?? 0) > 0,
+      )
+      .map((s) => ({
+        id: s.id,
+        canonicalName: s.canonical_name,
+        productFamily: s.product_family,
+        vendorCount: vendorCounts.get(s.id) ?? 0,
+      }))
+      .sort((a, b) => b.vendorCount - a.vendorCount)
+      .slice(0, limit);
+  }
+
+  /**
+   * Fetches vendor counts per system_id from vendor_systems, with a 5-minute
+   * in-memory cache. Uses a single aggregation query — no N+1.
+   */
+  private async getVendorCountsBySystem(): Promise<Map<number, number>> {
+    const now = Date.now();
+    if (this.vendorCountCache && now < this.vendorCountCacheExpiry) {
+      return this.vendorCountCache;
+    }
+
+    const rows: Array<{ system_id: number; cnt: string }> =
+      await this.systemRepo.manager.query(
+        'SELECT system_id, COUNT(*) AS cnt FROM vendor_systems GROUP BY system_id',
+      );
+
+    const map = new Map<number, number>();
+    for (const row of rows) {
+      map.set(Number(row.system_id), Number(row.cnt));
+    }
+
+    this.vendorCountCache = map;
+    this.vendorCountCacheExpiry = now + this.VENDOR_COUNT_CACHE_TTL_MS;
+    return map;
+  }
+
+  // ─── Tier 2.5 (word-tokenization) ─────────────────────────────────────────
+
+  /**
+   * Splits a multi-word input on whitespace and tests each token individually
+   * against Tier 1 (exactMap) and Tier 2 (aliasMap).
+   *
+   * - Single high-confidence token match → resolve with confidence 0.90
+   * - Multiple tokens → different systems → escalate to Tier 4 (ambiguous)
+   * - No high-confidence matches → return null (caller falls through to Tier 3)
+   */
+  private async resolveTier25(input: string): Promise<ResolveSystemResponseDto | null> {
+    const tokens = input.split(/\s+/).filter(Boolean);
+
+    type TokenResolution = { token: string; system: CachedSystemRecord; confidence: number };
+    const matched: TokenResolution[] = [];
+
+    for (const token of tokens) {
+      const t = token.toLowerCase();
+      const exact = this.exactMap.get(t);
+      if (exact) {
+        matched.push({ token, system: exact, confidence: 1.0 });
+        continue;
+      }
+      const alias = this.aliasMap.get(t);
+      if (alias) {
+        matched.push({ token, system: alias, confidence: 0.95 });
+      }
+    }
+
+    // Only act on high-confidence (≥ 0.95) token resolutions
+    const highConf = matched.filter((r) => r.confidence >= 0.95);
+    if (highConf.length === 0) {
+      return null;
+    }
+
+    const uniqueIds = new Set(highConf.map((r) => r.system.id));
+
+    if (uniqueIds.size === 1) {
+      // Clear single winner — other words are project-context noise
+      const { system, token } = highConf[0];
+      this.logger.debug(
+        `Tier 2.5: "${input}" → token "${token}" resolved "${system.canonical_name}" ` +
+          `(id=${system.id}); remaining words treated as context noise`,
+      );
+      return this.buildResponse(input, 2, 0.90, system, []);
+    }
+
+    // Multiple tokens resolved to different systems — ambiguous
+    const candidates = highConf.map((r) => this.toCandidate(r.system, r.confidence));
+    const tokenContext =
+      `These tokens in the user's input each resolved to different systems: ` +
+      highConf.map((r) => `"${r.token}" → ${r.system.canonical_name}`).join(', ') +
+      `. Which is the primary system the user wants help with?`;
+
+    this.logger.debug(`Tier 2.5: "${input}" — ambiguous token resolutions, escalating to Tier 4`);
+    return this.resolveTier4(input, candidates, tokenContext);
+  }
+
   // ─── Tier 4 (LLM) ─────────────────────────────────────────────────────────
 
   private async resolveTier4(
     input: string,
     candidates: SystemCandidateDto[],
+    extraContext?: string,
   ): Promise<ResolveSystemResponseDto> {
     const cacheKey = input.toLowerCase().trim();
 
@@ -300,7 +453,7 @@ export class SystemResolverService implements OnModuleInit {
     try {
       this.llmCallCount++;
       const { resolvedId, confidence, reasoning } =
-        await this.callLlm(input, candidates);
+        await this.callLlm(input, candidates, extraContext);
 
       const resolvedSystem = resolvedId
         ? this.systemsCache.find((s) => s.id === resolvedId) ?? null
@@ -343,6 +496,7 @@ export class SystemResolverService implements OnModuleInit {
   private async callLlm(
     input: string,
     candidates: SystemCandidateDto[],
+    extraContext?: string,
   ): Promise<{ resolvedId: number | null; confidence: number; reasoning: string }> {
     const candidateList = candidates
       .map(
@@ -351,10 +505,12 @@ export class SystemResolverService implements OnModuleInit {
       )
       .join('\n');
 
+    const contextBlock = extraContext ? `\n${extraContext}\n` : '';
+
     const prompt = `You are a system name resolver for a legal technology vendor matching platform.
 
 The user entered this system name: "${input}"
-
+${contextBlock}
 Top matching canonical systems from our database:
 ${candidateList}
 

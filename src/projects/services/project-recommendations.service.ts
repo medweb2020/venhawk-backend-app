@@ -10,6 +10,7 @@ import { Vendor } from '../../vendors/entities/vendor.entity';
 import { VendorResponseDto } from '../../vendors/dto/vendor-response.dto';
 import {
   ProjectRecommendationsResponseDto,
+  RelatedSystemDto,
   ResolverCandidateDto,
 } from '../dto/project-recommendations-response.dto';
 import { VendorsService } from '../../vendors/vendors.service';
@@ -141,14 +142,24 @@ export class ProjectRecommendationsService {
     const systemMatchedVendorIds = new Set<number>();
     let resolverStatus: ProjectRecommendationsResponseDto['resolverStatus'] = 'not_attempted';
     let resolverCandidates: ResolverCandidateDto[] | undefined;
+    // Stored for related-systems lookup when resolved system has 0 eligible vendors
+    let resolvedSystemId: number | null = null;
+    let resolvedSystemProductFamily: string | null = null;
 
     if (rawSystemName) {
       const resolution = await this.systemResolverService.resolve(rawSystemName);
 
       if (resolution.resolved && resolution.system) {
-        // 2a. System resolved — fetch vendors via vendor_systems JOIN (strict system_id match)
+        // 2a. System resolved — expand to all systems in the same product_family,
+        //     then fetch vendors via vendor_systems JOIN (family-wide match).
         resolverStatus = 'resolved';
-        vendors = await this.fetchVendorsBySystemId(resolution.system.id);
+        resolvedSystemId = resolution.system.id;
+        resolvedSystemProductFamily = resolution.system.productFamily;
+
+        const eligibleSystemIds = await this.systemResolverService.getSystemIdsInFamily(
+          resolution.system.id,
+        );
+        vendors = await this.fetchVendorsBySystemIds(eligibleSystemIds);
         vendors.forEach((v) => systemMatchedVendorIds.add(v.id));
 
         resolvedProjectSystem = {
@@ -160,7 +171,9 @@ export class ProjectRecommendationsService {
         };
 
         this.logger.debug(
-          `SystemResolverService resolved "${rawSystemName}" → "${resolution.system.canonicalName}" (id=${resolution.system.id}, tier=${resolution.tier}) — ${vendors.length} vendor(s) matched`,
+          `SystemResolverService resolved "${rawSystemName}" → "${resolution.system.canonicalName}" ` +
+            `(id=${resolution.system.id}, tier=${resolution.tier}) — family expansion: ` +
+            `${eligibleSystemIds.length} system(s) → ${vendors.length} vendor(s) matched`,
         );
       } else {
         // 2b. System unresolved (Tier 5) — strict mode: NO category fallback.
@@ -176,6 +189,41 @@ export class ProjectRecommendationsService {
           `SystemResolverService Tier ${resolution.tier} (unresolved) for "${rawSystemName}" ` +
             `(projectId=${project.id}) — top candidates: ${JSON.stringify(resolverCandidates)}`,
         );
+
+        // Build relatedSystems from the product families of the top candidates.
+        // Deduplicated across families, sorted by vendorCount desc, capped at 5.
+        const candidateFamilies = [
+          ...new Set(
+            resolution.candidates
+              .slice(0, 3)
+              .map((c) => c.productFamily)
+              .filter(Boolean),
+          ),
+        ];
+        let relatedSystems: RelatedSystemDto[] | undefined;
+        if (candidateFamilies.length > 0) {
+          const seen = new Set<number>();
+          const collected: RelatedSystemDto[] = [];
+          for (const family of candidateFamilies) {
+            const siblings = await this.systemResolverService.getRelatedSystemsForFamily(
+              family,
+              null,
+              5,
+            );
+            for (const sys of siblings) {
+              if (!seen.has(sys.id)) {
+                seen.add(sys.id);
+                collected.push(sys);
+              }
+            }
+          }
+          const sorted = collected
+            .sort((a, b) => b.vendorCount - a.vendorCount)
+            .slice(0, 5);
+          if (sorted.length > 0) {
+            relatedSystems = sorted;
+          }
+        }
 
         // Clear any stale stored matches for this project, then return early.
         await this.projectVendorMatchesRepository.manager.transaction(
@@ -198,6 +246,7 @@ export class ProjectRecommendationsService {
           resolverStatus: 'unresolved',
           resolverCandidates,
           submittedSystemName: rawSystemName,
+          ...(relatedSystems ? { relatedSystems } : {}),
           recommendedVendors: [],
         };
       }
@@ -271,6 +320,25 @@ export class ProjectRecommendationsService {
       },
     );
 
+    // When the system resolved but returned 0 eligible vendors, surface sibling
+    // systems in the same product_family that do have vendor coverage.
+    let relatedSystems: RelatedSystemDto[] | undefined;
+    if (
+      scored.length === 0 &&
+      resolverStatus === 'resolved' &&
+      resolvedSystemId !== null &&
+      resolvedSystemProductFamily !== null
+    ) {
+      const siblings = await this.systemResolverService.getRelatedSystemsForFamily(
+        resolvedSystemProductFamily,
+        resolvedSystemId,
+        5,
+      );
+      if (siblings.length > 0) {
+        relatedSystems = siblings;
+      }
+    }
+
     const response: ProjectRecommendationsResponseDto = {
       projectId: project.id,
       scoringVersion: this.SCORING_VERSION,
@@ -279,6 +347,7 @@ export class ProjectRecommendationsService {
       noEligibleVendors: scored.length === 0,
       resolverStatus,
       ...(rawSystemName ? { submittedSystemName: rawSystemName } : {}),
+      ...(relatedSystems ? { relatedSystems } : {}),
       recommendedVendors: scored.map((result) =>
         this.toVendorResponseDto(
           result.vendor,
@@ -472,14 +541,14 @@ JSON:`,
       .getMany();
   }
 
-  private async fetchVendorsBySystemId(systemId: number): Promise<Vendor[]> {
+  private async fetchVendorsBySystemIds(systemIds: number[]): Promise<Vendor[]> {
     return this.vendorsRepository
       .createQueryBuilder('vendor')
       .innerJoin(
         'vendor_systems',
         'vs',
-        'vs.vendor_id = vendor.id AND vs.system_id = :systemId',
-        { systemId },
+        'vs.vendor_id = vendor.id AND vs.system_id IN (:...systemIds)',
+        { systemIds },
       )
       .where('vendor.status IN (:...statuses)', {
         statuses: this.ACTIVE_VENDOR_STATUSES,
@@ -1052,7 +1121,8 @@ JSON:`,
         strictCategoryGate: true,
         categoryMatchSource: 'vendor_project_categories',
         strictSystemGate: true,
-        projectSystemMatchMode: 'db-join-system-id-strict',
+        projectSystemMatchMode: 'db-join-system-family',
+        productFamilyExpansion: true,
         vendorSystemField: 'vendor_systems.system_id',
       },
       reasoningPolicy: {
