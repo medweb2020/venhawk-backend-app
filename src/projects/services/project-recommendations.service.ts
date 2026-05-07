@@ -18,8 +18,8 @@ import { VendorListingFiltersDto } from '../../vendors/dto/vendor-listing-filter
 import {
   MatchReason,
   ProjectRecommendationReasoningService,
-  RecommendationProjectReasoningInput,
-  RecommendationVendorReasoningInput,
+  ReasoningDebugSource,
+  ResolvedSystemContext,
 } from './project-recommendation-reasoning.service';
 import {
   LEGAL_CLIENT_INDUSTRY_VALUE,
@@ -145,6 +145,7 @@ export class ProjectRecommendationsService {
     // Stored for related-systems lookup when resolved system has 0 eligible vendors
     let resolvedSystemId: number | null = null;
     let resolvedSystemProductFamily: string | null = null;
+    let resolvedSystemContext: ResolvedSystemContext | null = null;
 
     if (rawSystemName) {
       const resolution = await this.systemResolverService.resolve(rawSystemName);
@@ -155,6 +156,11 @@ export class ProjectRecommendationsService {
         resolverStatus = 'resolved';
         resolvedSystemId = resolution.system.id;
         resolvedSystemProductFamily = resolution.system.productFamily;
+        resolvedSystemContext = {
+          id: resolution.system.id,
+          canonicalName: resolution.system.canonicalName,
+          productFamily: resolution.system.productFamily,
+        };
 
         const eligibleSystemIds = await this.systemResolverService.getSystemIdsInFamily(
           resolution.system.id,
@@ -287,14 +293,55 @@ export class ProjectRecommendationsService {
       );
     const scored = [...primary, ...overflow];
 
-    const reasoningByVendorId =
-      await this.projectRecommendationReasoningService.generateTopMatchReasons(
-        project.id,
-        this.toProjectReasoningInput(project, resolvedProjectSystem),
-        scored.map((result) =>
-          this.toReasoningVendorInput(result, project, resolvedProjectSystem),
-        ),
-      );
+    // Generate reasoning in parallel for all scored vendors.
+    // Ranks 1-3: rich 2-3 sentence LLM output (claude-sonnet).
+    // Ranks 4-10: 1-sentence LLM output (claude-haiku).
+    // Ranks 11+: null returned immediately (no API call).
+    // Individual failures return null without blocking other vendors.
+    const reasoningResults = await Promise.all(
+      scored.map((result, index) => {
+        const rank = index + 1;
+        return this.projectRecommendationReasoningService
+          .getCachedOrGenerate(
+            project,
+            result.vendor,
+            resolvedSystemContext,
+            rank,
+          )
+          .catch((err) => {
+            this.logger.error(
+              `reasoning failed vendorId=${result.vendor.id} rank=${rank}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+            return null;
+          });
+      }),
+    );
+
+    const reasoningByVendorId = new Map<number, MatchReason>(
+      scored
+        .map((result, index) => {
+          const entry = reasoningResults[index];
+          if (!entry) return null;
+          return [
+            result.vendor.id,
+            { text: entry.text, source: 'claude' as const },
+          ] as [number, MatchReason];
+        })
+        .filter((entry): entry is [number, MatchReason] => entry !== null),
+    );
+
+    const reasoningDebugSourceByVendorId = new Map<number, ReasoningDebugSource>(
+      scored
+        .map((result, index) => {
+          const entry = reasoningResults[index];
+          return [
+            result.vendor.id,
+            entry ? entry.source : ('unavailable' as ReasoningDebugSource),
+          ] as [number, ReasoningDebugSource];
+        }),
+    );
 
     const computedAt = new Date();
     const records = scored.map((result, index) =>
@@ -305,6 +352,7 @@ export class ProjectRecommendationsService {
           index + 1,
           computedAt,
           reasoningByVendorId.get(result.vendor.id) || null,
+          reasoningDebugSourceByVendorId.get(result.vendor.id),
         ),
       ),
     );
@@ -357,6 +405,7 @@ export class ProjectRecommendationsService {
           this.attachReasonToBreakdown(
             result.breakdown,
             reasoningByVendorId.get(result.vendor.id) || null,
+            reasoningDebugSourceByVendorId.get(result.vendor.id),
           ),
           reasoningByVendorId.get(result.vendor.id) || null,
         ),
@@ -819,67 +868,13 @@ JSON:`,
     } as DimensionScore;
   }
 
-  private toProjectReasoningInput(
-    project: Project,
-    resolvedProjectSystem: ResolvedProjectSystem | null,
-  ): RecommendationProjectReasoningInput {
-    return {
-      projectTitle: String(project.project_title || ''),
-      industry: String(
-        project.clientIndustry?.label || project.clientIndustry?.value || '',
-      ),
-      category: String(
-        project.projectCategory?.label || project.projectCategory?.value || '',
-      ),
-      systemName: String(
-        resolvedProjectSystem?.resolvedLabel || project.system_name || '',
-      ),
-      projectObjective: String(project.project_objective || ''),
-      businessRequirements: String(project.business_requirements || ''),
-      technicalRequirements: String(project.technical_requirements || ''),
-    };
-  }
-
-  private toReasoningVendorInput(
-    result: VendorRecommendationResult,
-    project: Project,
-    resolvedProjectSystem: ResolvedProjectSystem | null,
-  ): RecommendationVendorReasoningInput {
-    const vendor = result.vendor;
-    const ratingSignals = this.extractRatingSignals(vendor);
-    const caseStudyCount = Math.max(
-      this.toNumber(vendor.case_study_count_public),
-      this.toNumber(vendor.legal_case_studies_count),
-    );
-
-    return {
-      vendorId: vendor.id,
-      vendorName: String(vendor.brand_name || ''),
-      matchingScore: result.displayScore,
-      tier: vendor.listing_tier || this.calculateTier(vendor),
-      legalFocusLevel: String(vendor.legal_focus_level || 'Some'),
-      specialty: this.buildVendorSpecialty(
-        vendor,
-        project,
-        3,
-        resolvedProjectSystem?.resolvedLabel || null,
-      ),
-      serviceDomains: this.parseCsvValues(vendor.service_domains, 3),
-      legalTechStack: this.parseCsvValues(vendor.legal_tech_stack, 4),
-      topStrengths: this.extractTopStrengthLabels(result.breakdown),
-      partnerSignals: this.extractPartnerSignals(vendor),
-      rating: ratingSignals.rating,
-      reviewCount: ratingSignals.reviewCount,
-      caseStudyCount,
-    };
-  }
-
   private toStoredRecommendationRecord(
     projectId: number,
     result: VendorRecommendationResult,
     rankPosition: number,
     computedAt: Date,
     matchReason: MatchReason | null,
+    reasoningDebugSource?: ReasoningDebugSource,
   ): Partial<ProjectVendorMatch> {
     return {
       project_id: projectId,
@@ -890,6 +885,7 @@ JSON:`,
       score_breakdown_json: this.attachReasonToBreakdown(
         result.breakdown,
         matchReason,
+        reasoningDebugSource,
       ),
       scoring_version: this.SCORING_VERSION,
       computed_at: computedAt,
@@ -899,13 +895,18 @@ JSON:`,
   private attachReasonToBreakdown(
     scoreBreakdown: Record<string, unknown>,
     matchReason: MatchReason | null,
+    reasoningDebugSource?: ReasoningDebugSource,
   ): Record<string, unknown> {
+    const base: Record<string, unknown> = reasoningDebugSource
+      ? { ...scoreBreakdown, reasoning_source: reasoningDebugSource }
+      : { ...scoreBreakdown };
+
     if (!matchReason?.text) {
-      return scoreBreakdown;
+      return base;
     }
 
     return {
-      ...scoreBreakdown,
+      ...base,
       matchingReason: matchReason.text,
       matchingReasonSource: matchReason.source,
     };
@@ -1126,10 +1127,11 @@ JSON:`,
         vendorSystemField: 'vendor_systems.system_id',
       },
       reasoningPolicy: {
-        allMatchesHaveReason: true,
-        aiTopMatchLimit: 3,
-        minSentences: 2,
-        maxSentences: 2,
+        provider: 'anthropic',
+        richRankLimit: 3,
+        lightRankLimit: 10,
+        richSentences: '2-3',
+        lightSentences: 1,
       },
       scoringFns: {
         capability: this.calculateCapabilityScore.toString(),
