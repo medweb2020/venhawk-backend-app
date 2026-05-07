@@ -10,9 +10,9 @@ import { Vendor } from '../../vendors/entities/vendor.entity';
 import { VendorResponseDto } from '../../vendors/dto/vendor-response.dto';
 import {
   ProjectRecommendationsResponseDto,
-  RelatedSystemDto,
   ResolverCandidateDto,
 } from '../dto/project-recommendations-response.dto';
+import { RelatedSystemDto } from '../../systems/dto/system-response.dto';
 import { VendorsService } from '../../vendors/vendors.service';
 import { VendorListingFiltersDto } from '../../vendors/dto/vendor-listing-filters.dto';
 import {
