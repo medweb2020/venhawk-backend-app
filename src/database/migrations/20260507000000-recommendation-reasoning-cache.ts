@@ -6,12 +6,10 @@ export class RecommendationReasoningCache20260507000000
   name = 'RecommendationReasoningCache20260507000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    const hasTable = await queryRunner.hasTable(
-      'recommendation_reasoning_cache',
+    // Drop-if-exists guard: handles partially-created table from a failed run
+    await queryRunner.query(
+      `DROP TABLE IF EXISTS recommendation_reasoning_cache`,
     );
-    if (hasTable) {
-      return;
-    }
 
     await queryRunner.createTable(
       new Table({
@@ -26,15 +24,16 @@ export class RecommendationReasoningCache20260507000000
             generationStrategy: 'increment',
           },
           {
+            // projects.id is BIGINT UNSIGNED — must match exactly
             name: 'project_id',
-            type: 'int',
+            type: 'bigint',
             unsigned: true,
             isNullable: false,
           },
           {
+            // vendors.id is INT (signed) — must match exactly
             name: 'vendor_id',
             type: 'int',
-            unsigned: true,
             isNullable: false,
           },
           {
