@@ -16,10 +16,12 @@ export class RecommendationReasoningCache {
   @PrimaryGeneratedColumn({ type: 'int', unsigned: true })
   id: number;
 
-  @Column({ type: 'int', unsigned: true })
+  // bigint unsigned — must match projects.id (Project entity uses bigint unsigned)
+  @Column({ type: 'bigint', unsigned: true })
   project_id: number;
 
-  @Column({ type: 'int', unsigned: true })
+  // int signed — must match vendors.id (no unsigned on the vendors table)
+  @Column({ type: 'int' })
   vendor_id: number;
 
   @Column({ type: 'text' })

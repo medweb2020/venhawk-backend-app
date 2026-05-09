@@ -85,8 +85,14 @@ export class ProjectRecommendationReasoningService {
       : null;
 
     if (!this.anthropicClient) {
-      this.logger.warn(
-        'Anthropic_API_Key is missing — reasoning service disabled.',
+      this.logger.error(
+        '[ReasoningService] STARTUP: Anthropic_API_Key is missing or empty — reasoning DISABLED. ' +
+          'Ensure the Railway env var is named exactly "Anthropic_API_Key".',
+      );
+    } else {
+      this.logger.log(
+        `[ReasoningService] STARTUP: Anthropic client initialised OK. ` +
+          `key prefix=${apiKey.slice(0, 12)}… primary=${this.primaryModel} secondary=${this.secondaryModel} cap=${this.dailyCap}`,
       );
     }
   }
