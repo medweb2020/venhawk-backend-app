@@ -86,7 +86,9 @@ export class ProjectRecommendationsService {
     private readonly systemResolverService: SystemResolverService,
   ) {
     const apiKey = String(
-      this.configService.get<string>('ANTHROPIC_API_KEY') ||
+      process.env['ANTHROPIC_API_KEY'] ||
+        process.env['Anthropic_API_Key'] ||
+        this.configService.get<string>('ANTHROPIC_API_KEY') ||
         this.configService.get<string>('Anthropic_API_Key') ||
         '',
     ).trim();

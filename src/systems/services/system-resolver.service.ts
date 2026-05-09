@@ -77,11 +77,13 @@ export class SystemResolverService implements OnModuleInit {
     private readonly logRepo: Repository<SystemResolverLog>,
     private readonly configService: ConfigService,
   ) {
-    // Accept both naming conventions — ANTHROPIC_API_KEY (new standard) and
-    // Anthropic_API_Key (legacy codebase convention).
+    // Read directly from process.env first — bypasses ConfigService scoping issues.
     const apiKey =
-      this.configService.get<string>('ANTHROPIC_API_KEY') ??
-      this.configService.get<string>('Anthropic_API_Key');
+      process.env['ANTHROPIC_API_KEY'] ||
+      process.env['Anthropic_API_Key'] ||
+      this.configService.get<string>('ANTHROPIC_API_KEY') ||
+      this.configService.get<string>('Anthropic_API_Key') ||
+      '';
     this.anthropic = apiKey ? new Anthropic({ apiKey }) : null;
     this.llmModel =
       this.configService.get<string>('ANTHROPIC_RECOMMENDATIONS_MODEL') ??

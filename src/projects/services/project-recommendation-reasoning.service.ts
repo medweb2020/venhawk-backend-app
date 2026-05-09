@@ -59,24 +59,31 @@ export class ProjectRecommendationReasoningService {
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {
+    // Read directly from process.env — bypasses ConfigService caching/scoping issues.
+    // Falls back through all known casing variants used across Railway deployments.
     const apiKey = String(
-      this.configService.get<string>('ANTHROPIC_API_KEY') ||
+      process.env['ANTHROPIC_API_KEY'] ||
+        process.env['Anthropic_API_Key'] ||
+        this.configService.get<string>('ANTHROPIC_API_KEY') ||
         this.configService.get<string>('Anthropic_API_Key') ||
         '',
     ).trim();
 
     this.primaryModel = String(
-      this.configService.get<string>('ANTHROPIC_REASONING_MODEL_PRIMARY') ||
+      process.env['ANTHROPIC_REASONING_MODEL_PRIMARY'] ||
+        this.configService.get<string>('ANTHROPIC_REASONING_MODEL_PRIMARY') ||
         'claude-sonnet-4-5',
     ).trim();
 
     this.secondaryModel = String(
-      this.configService.get<string>('ANTHROPIC_REASONING_MODEL_SECONDARY') ||
+      process.env['ANTHROPIC_REASONING_MODEL_SECONDARY'] ||
+        this.configService.get<string>('ANTHROPIC_REASONING_MODEL_SECONDARY') ||
         'claude-haiku-4-5',
     ).trim();
 
     const capRaw = Number(
-      this.configService.get<string>('ANTHROPIC_REASONING_DAILY_CAP') ??
+      process.env['ANTHROPIC_REASONING_DAILY_CAP'] ??
+        this.configService.get<string>('ANTHROPIC_REASONING_DAILY_CAP') ??
         DAILY_CAP_DEFAULT,
     );
     this.dailyCap = Number.isFinite(capRaw) && capRaw > 0 ? capRaw : DAILY_CAP_DEFAULT;
@@ -86,14 +93,20 @@ export class ProjectRecommendationReasoningService {
       ? new Anthropic({ apiKey, timeout: 15_000, maxRetries: 1 })
       : null;
 
+    // Log all Anthropic-related env keys visible to Node.js (names only, no values)
+    const anthropicEnvKeys = Object.keys(process.env).filter((k) =>
+      k.toLowerCase().includes('anthropic'),
+    );
     if (!this.anthropicClient) {
       this.logger.error(
-        '[ReasoningService] STARTUP: Anthropic key loaded: NO — ' +
-          'neither ANTHROPIC_API_KEY nor Anthropic_API_Key is set in env. Reasoning DISABLED.',
+        `[ReasoningService] STARTUP: Anthropic key loaded: NO. ` +
+          `Anthropic-related keys visible in process.env: [${anthropicEnvKeys.join(', ') || 'NONE'}]. ` +
+          `Reasoning DISABLED.`,
       );
     } else {
       this.logger.log(
         `[ReasoningService] STARTUP: Anthropic key loaded: YES (length=${apiKey.length}) ` +
+          `keys=[${anthropicEnvKeys.join(', ')}] ` +
           `primary=${this.primaryModel} secondary=${this.secondaryModel} cap=${this.dailyCap}`,
       );
     }
