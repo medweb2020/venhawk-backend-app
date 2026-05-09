@@ -80,7 +80,9 @@ export class ProjectSystemResolutionService {
 
   constructor(private readonly configService: ConfigService) {
     const apiKey = String(
-      this.configService.get<string>('Anthropic_API_Key') || '',
+      this.configService.get<string>('ANTHROPIC_API_KEY') ||
+        this.configService.get<string>('Anthropic_API_Key') ||
+        '',
     ).trim();
     const timeoutMs = this.parseTimeoutMs(
       this.configService.get<string>('ANTHROPIC_RECOMMENDATIONS_TIMEOUT_MS'),

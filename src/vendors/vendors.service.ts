@@ -231,7 +231,9 @@ export class VendorsService {
     private readonly configService: ConfigService,
   ) {
     const apiKey = String(
-      this.configService.get<string>('Anthropic_API_Key') || '',
+      this.configService.get<string>('ANTHROPIC_API_KEY') ||
+        this.configService.get<string>('Anthropic_API_Key') ||
+        '',
     ).trim();
     this.anthropic = apiKey ? new Anthropic({ apiKey }) : null;
   }

@@ -60,7 +60,9 @@ export class ProjectRecommendationReasoningService {
     private readonly dataSource: DataSource,
   ) {
     const apiKey = String(
-      this.configService.get<string>('Anthropic_API_Key') || '',
+      this.configService.get<string>('ANTHROPIC_API_KEY') ||
+        this.configService.get<string>('Anthropic_API_Key') ||
+        '',
     ).trim();
 
     this.primaryModel = String(
@@ -86,13 +88,13 @@ export class ProjectRecommendationReasoningService {
 
     if (!this.anthropicClient) {
       this.logger.error(
-        '[ReasoningService] STARTUP: Anthropic_API_Key is missing or empty — reasoning DISABLED. ' +
-          'Ensure the Railway env var is named exactly "Anthropic_API_Key".',
+        '[ReasoningService] STARTUP: Anthropic key loaded: NO — ' +
+          'neither ANTHROPIC_API_KEY nor Anthropic_API_Key is set in env. Reasoning DISABLED.',
       );
     } else {
       this.logger.log(
-        `[ReasoningService] STARTUP: Anthropic client initialised OK. ` +
-          `key prefix=${apiKey.slice(0, 12)}… primary=${this.primaryModel} secondary=${this.secondaryModel} cap=${this.dailyCap}`,
+        `[ReasoningService] STARTUP: Anthropic key loaded: YES (length=${apiKey.length}) ` +
+          `primary=${this.primaryModel} secondary=${this.secondaryModel} cap=${this.dailyCap}`,
       );
     }
   }
@@ -211,10 +213,10 @@ export class ProjectRecommendationReasoningService {
 
       return { text: reasoning, source: 'llm-generated' };
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? (error.stack ?? '') : '';
       this.logger.error(
-        `reasoning generation failed projectId=${project.id} vendorId=${vendor.id} rank=${rank}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `reasoning generation failed projectId=${project.id} vendorId=${vendor.id} rank=${rank} model=${rank <= RICH_RANK_LIMIT ? this.primaryModel : this.secondaryModel}: ${msg}\n${stack}`,
       );
       return null;
     }

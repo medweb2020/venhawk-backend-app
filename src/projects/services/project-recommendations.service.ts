@@ -85,7 +85,11 @@ export class ProjectRecommendationsService {
     private readonly configService: ConfigService,
     private readonly systemResolverService: SystemResolverService,
   ) {
-    const apiKey = String(this.configService.get<string>('Anthropic_API_Key') || '').trim();
+    const apiKey = String(
+      this.configService.get<string>('ANTHROPIC_API_KEY') ||
+        this.configService.get<string>('Anthropic_API_Key') ||
+        '',
+    ).trim();
     this.extractionModel = String(
       this.configService.get<string>('ANTHROPIC_RECOMMENDATIONS_MODEL') || 'claude-sonnet-4-20250514',
     ).trim();
